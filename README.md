@@ -1,19 +1,19 @@
 # Zenin Club
 
-[Store](https://ealfaro29.github.io/zenin-club/) · [Admin](https://ealfaro29.github.io/zenin-club/#admin) · [Repository](https://github.com/ealfaro29/zenin-club)
+[Store](https://ealfaro29.github.io/zenin-club/) · [Admin](https://ealfaro29.github.io/zenin-club/#admin) · [Inventory](https://ealfaro29.github.io/zenin-club/#admin/inventory) · [Repository](https://github.com/ealfaro29/zenin-club)
 
-A bilingual Zenin Club concept store with 16 graphic tees, product/color/size selection, a persistent bag, checkout, customer tracking, and shared order administration. Spanish is the default; visitors can switch to English and retain their preference.
+A bilingual Zenin Club concept store with 16 graphic tees, product/color/size selection, a persistent bag, checkout, customer tracking, and shared order and inventory administration. The storefront, checkout and admin use a dark theme. Spanish is the default; visitors can switch to English and retain their preference.
 
 ## Architecture
 
 - **GitHub Pages** serves the static frontend from `main:/docs`, using relative assets and hash routes.
 - **Cloudflare Worker** handles checkout, tracking and authenticated admin requests. `docs/config.js` contains its public API base URL.
-- **Cloudflare D1** is the source of truth for orders and fulfillment updates across devices. Checkout sends customer contact and delivery details to the API for storage.
+- **Cloudflare D1** is the source of truth for orders, fulfillment updates and inventory across devices. Checkout sends customer contact and delivery details to the API for storage.
 - The browser retains the bag, language preference and customer tracking references. Admin bearer sessions use tab-scoped session storage and expire after six hours.
 
 The Worker owns product prices, names, totals and validation. Shipping is USD 8, or free from a **pre-discount** subtotal of USD 120. `ZENIN10` applies a 10% discount. Checkout retries reuse an idempotency key to prevent duplicate orders.
 
-Payments are simulated: no charge is made. Product specifications and inventory remain sample content. Admin updates are saved, while shipping labels, payment processing and transactional emails are not configured.
+Payments are simulated: no charge is made. Product specifications remain sample content. Inventory starts with a clearly labeled demo opening balance of 12 per variant and is then managed through Admin → Inventory; active existing orders are deducted during initialization. Admin updates are saved, while shipping labels, payment processing and transactional emails are not configured.
 
 ## Local development and checks
 
@@ -61,9 +61,10 @@ GitHub Pages publishes `main` from `/docs`; pushing to `main` updates the store.
 | `docs/commerce.js` | Bag, validated checkout and saved-order confirmation |
 | `docs/orders-api.js`, `docs/config.js` | API client and public endpoint configuration |
 | `docs/order-tracking.js` | Customer order lookup, status history and delivery details |
-| `docs/admin.js` | Admin sign-in, shared order list, status changes, private notes and tracking |
+| `docs/admin.js`, `docs/admin-inventory.js` | Shared admin session, orders, inventory adjustments and movement history |
+| `docs/inventory.js` | Cached public availability used by product, bag and checkout controls |
 | `docs/i18n.js` | Spanish/English copy, product names and formatting |
-| `docs/styles.css` | Responsive storefront, checkout and administration styles |
+| `docs/styles.css`, `docs/dark-theme.css` | Responsive storefront, checkout and dark theme |
 | `backend/worker.js`, `backend/schema.sql` | Order API and D1 persistence |
 | `backend/tests.mjs` | SQLite-backed backend integration tests |
 

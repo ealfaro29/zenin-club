@@ -1,8 +1,9 @@
-import { createCommerce } from './commerce.js?v=40';
+import { createCommerce } from './commerce.js?v=42';
 import { initStorefrontUI } from './storefront-ui.js?v=40';
 import {l,getLanguage,setLanguage,formatMoney,productName,colorLabel,collectionName} from './i18n.js?v=40';
-import {mountAdmin} from './admin.js?v=40';
+import {mountAdmin} from './admin.js?v=42';
 import {mountOrderTracking} from './order-tracking.js?v=41';
+import {ensureInventory,refreshInventory,getStock,getInventoryState,getProductAvailability,inventoryMessage} from './inventory.js?v=42';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -44,7 +45,7 @@ function stageColor(product) {
 }
 function productCard(product) {
   const title=productName(product);const shortName=title.replace(/^Camiseta /,'').replace(/ Tee$/,'');
-  return `<article class="product-card"><div class="product-image" style="--stage:${stageColor(product)}"><a class="product-picture" href="#product/${product.slug}" aria-label="${l('Ver','View')} ${esc(title)}">${shirtHTML(product)}</a>${product.tag==='NEW'?`<span class="product-tag">${l('Nuevo','New')}</span>`:''}<div class="card-sizes" aria-label="${l('Añadir','Quick add')} ${esc(title)}">${['S','M','L','XL','XXL'].map(size=>`<button data-add-size="${size}" data-product="${product.id}" aria-label="${l('Añadir','Add')} ${esc(title)} ${l('talla','size')} ${size}">${size}</button>`).join('')}</div><button class="quick-add" data-quick="${product.id}" aria-label="${l('Añadir','Quick add')} ${esc(title)}">+</button></div><div class="product-meta"><div><a href="#product/${product.slug}"><h3>${esc(shortName)}</h3></a><p>${l('Camiseta','T-Shirt')}</p></div><div class="product-price"><span>${money(product.price)}</span><small>USD</small></div></div></article>`;
+  return `<article class="product-card" data-product-card="${product.id}"><div class="product-image" style="--stage:${stageColor(product)}"><a class="product-picture" href="#product/${product.slug}" aria-label="${l('Ver','View')} ${esc(title)}">${shirtHTML(product)}</a>${product.tag==='NEW'?`<span class="product-tag">${l('Nuevo','New')}</span>`:''}<div class="card-sizes" aria-label="${l('Añadir','Quick add')} ${esc(title)}">${['S','M','L','XL','XXL'].map(size=>`<button data-add-size="${size}" data-product="${product.id}" aria-label="${l('Añadir','Add')} ${esc(title)} ${l('talla','size')} ${size}">${size}</button>`).join('')}</div><button class="quick-add" data-quick="${product.id}" aria-label="${l('Añadir','Quick add')} ${esc(title)}">+</button></div><div class="product-meta"><div><a href="#product/${product.slug}"><h3>${esc(shortName)}</h3></a><p>${l('Camiseta','T-Shirt')}</p></div><div class="product-price"><span>${money(product.price)}</span><small>USD</small></div></div></article>`;
 }
 function sortHTML() {
   return `<div class="floating-sort"><div id="sort-menu" class="sort-menu" hidden><button data-sort="price-asc">${l('Menor precio','Lowest Price')}</button><button data-sort="featured">${l('Destacados','Best Sellers')}</button><button data-sort="price-desc">${l('Mayor precio','Highest Price')}</button><button data-sort="name">${l('Nombre A–Z','Name A–Z')}</button></div><button id="sort-toggle" aria-expanded="false" aria-controls="sort-menu">${l('ORDENAR','SORT BY')} <span>⌃</span></button></div>`;
@@ -63,7 +64,7 @@ const DESCRIPTION_ES={
 'zc-001':'Dulces problemas, después de oscuro. Tu camiseta de todos los días, con una cereza de más.','zc-002':'Mantenerlo todo bajo control es un trabajo de tiempo completo. Hoy puedes tomarte el día libre.','zc-003':'Sin línea de meta. Solo el camino largo a casa. Para esas horas que son tuyas.','zc-004':'Lo bueno llega cuando te atreves. Tu camiseta de la suerte empieza aquí.','zc-005':'Un poco de queso extra nunca está de más. Para pedidos tarde y planes todavía más tarde.','zc-006':'Ya sabes lo que te gusta. Un básico con todo lo bueno incluido.','zc-007':'Un poco de picante llega lejos. Sube la temperatura sin decir una palabra.','zc-008':'Un día normal merece una muy buena camiseta. El estado de ánimo ya está resuelto.','zc-009':'Demasiadas pestañas abiertas. Una cosa menos en qué pensar. Un uniforme para el caos.','zc-010':'La amistad de la que te advirtieron. Buena compañía, ideas cuestionables.','zc-011':'Las cosas pequeñas hacen el trabajo grande. Un clásico para tu rotación diaria.','zc-012':'Guarda un poco de misterio. Ser parte del club es un estado mental.','zc-013':'Algunas cosas mejoran con la repetición. Tu próxima favorita para usar una y otra vez.','zc-014':'Ventanas abajo. Sin destino. Una invitación a tomar la ruta larga.','zc-015':'La respuesta automática ya está activada. Busca un camino y olvida el horario.','zc-016':'Empaca poco. Quédate más. Para los planes que no necesitan fecha de regreso.'};
 function productHTML(product) {
   activeProduct=product;chosenSize='';chosenShirt=product.shirt;
-  return `<section class="product-page"><div class="product-detail"><div class="detail-gallery"><div class="detail-thumbnails" aria-label="${l('Vistas del producto','Product views')}">${[product.shirt,...[1,2,3,4].filter(s=>s!==product.shirt)].map((s,i)=>`<button data-color="${s}" class="detail-thumb ${i===0?'selected':''}" aria-label="${l('Ver','View')} ${colorLabel(s)}">${shirtHTML({...product,shirt:s,colorName:colors[s].name})}</button>`).join('')}</div><div class="detail-image" style="--stage:${stageColor(product)}"><div id="detail-shirt">${shirtHTML(product)}</div></div></div><div class="detail-copy"><span class="detail-type">${l('Camiseta','T-Shirt')}</span><div class="product-title-row"><h1>${esc(productName(product))}</h1><span aria-hidden="true">${product.emoji}</span></div><p class="detail-description">${esc(getLanguage()==='es'?DESCRIPTION_ES[product.id]||product.description:product.description)}</p><ul class="product-benefits"><li>${l('Sensación de algodón grueso','Heavyweight cotton feel')}</li><li>${l('Corte amplio unisex','Unisex oversized fit')}</li><li>${l('Acabado lavado y hombros caídos','Washed finish, dropped shoulders')}</li><li>${l('Gráfico original de Zenin Club','Original Zenin Club graphic')}</li></ul><div class="detail-color-label">Color: <strong id="chosen-color">${esc(colorLabel(product.shirt))}</strong></div><div class="color-options" role="group" aria-label="${l('Elegir color','Select shirt color')}">${Object.entries(colors).map(([key,c])=>`<button class="color-swatch ${+key===product.shirt?'selected':''}" style="--swatch:${c.hex}" data-color="${key}" aria-label="${colorLabel(key)}" aria-pressed="${+key===product.shirt}"></button>`).join('')}</div><div class="size-label"><span>${l('Talla','Size')}: <strong id="chosen-size">${l('Selecciona tu talla','Select size')}</strong></span><button class="underlined" data-info="size">${l('Guía de tallas','Size Guide')}</button></div><div class="size-options" role="group" aria-label="${l('Elegir talla','Choose a size')}">${['S','M','L','XL','XXL'].map(size=>`<button data-size="${size}" aria-pressed="false">${size}</button>`).join('')}</div><p class="size-error" id="size-error" role="status"></p><button class="btn btn-primary detail-add" id="detail-add"><span>${l('AÑADIR AL CARRITO','ADD TO CART')}</span><span>${money(product.price)} <small>USD</small></span></button><span class="detail-shipping">${l('Envío gratis desde $120 · Pedido de prueba, sin cobro','Free shipping over $120 · Demo order, no charge')}</span><div class="product-accordions"><details><summary>${l('Detalles del producto','Product Details')} <span>+</span></summary><p>${l('Corte amplio, acabado lavado y gráfico de Zenin Club. Tallas unisex S–XXL. Las especificaciones son de ejemplo para esta tienda de prueba.','Oversized fit, washed finish, and a Zenin Club graphic. Unisex sizing S–XXL. Product specifications are placeholder copy for this concept store.')}</p></details><details><summary>${l('Talla y cuidados','Fit & Care')} <span>+</span></summary><p>${l('Elige tu talla habitual para un corte amplio. Lava con agua fría, al revés. Deja secar al aire.','Choose your regular size for an oversized fit. Wash cold, inside out. Hang dry.')}</p></details><details><summary>${l('Envíos y devoluciones','Shipping & Returns')} <span>+</span></summary><p>${l('Los pedidos se guardan para que el administrador pueda prepararlos y actualizar su estado. Esta tienda de prueba no cobra pagos ni contrata envíos reales.','Orders are saved so the administrator can prepare them and update their status. This concept store does not charge payments or book real shipping.')}</p></details></div></div></div><section class="related-products"><h2>${l('También te puede gustar','You might also like')}</h2><div class="product-grid">${products.filter(p=>p.id!==product.id).slice(0,4).map(productCard).join('')}</div></section></section>`;
+  return `<section class="product-page"><div class="product-detail"><div class="detail-gallery"><div class="detail-thumbnails" aria-label="${l('Vistas del producto','Product views')}">${[product.shirt,...[1,2,3,4].filter(s=>s!==product.shirt)].map((s,i)=>`<button data-color="${s}" class="detail-thumb ${i===0?'selected':''}" aria-label="${l('Ver','View')} ${colorLabel(s)}">${shirtHTML({...product,shirt:s,colorName:colors[s].name})}</button>`).join('')}</div><div class="detail-image" style="--stage:${stageColor(product)}"><div id="detail-shirt">${shirtHTML(product)}</div></div></div><div class="detail-copy"><span class="detail-type">${l('Camiseta','T-Shirt')}</span><div class="product-title-row"><h1>${esc(productName(product))}</h1><span aria-hidden="true">${product.emoji}</span></div><p class="detail-description">${esc(getLanguage()==='es'?DESCRIPTION_ES[product.id]||product.description:product.description)}</p><ul class="product-benefits"><li>${l('Sensación de algodón grueso','Heavyweight cotton feel')}</li><li>${l('Corte amplio unisex','Unisex oversized fit')}</li><li>${l('Acabado lavado y hombros caídos','Washed finish, dropped shoulders')}</li><li>${l('Gráfico original de Zenin Club','Original Zenin Club graphic')}</li></ul><div class="detail-color-label">Color: <strong id="chosen-color">${esc(colorLabel(product.shirt))}</strong></div><div class="color-options" role="group" aria-label="${l('Elegir color','Select shirt color')}">${Object.entries(colors).map(([key,c])=>`<button class="color-swatch ${+key===product.shirt?'selected':''}" style="--swatch:${c.hex}" data-color="${key}" aria-label="${colorLabel(key)}" aria-pressed="${+key===product.shirt}"></button>`).join('')}</div><div class="size-label"><span>${l('Talla','Size')}: <strong id="chosen-size">${l('Selecciona tu talla','Select size')}</strong></span><button class="underlined" data-info="size">${l('Guía de tallas','Size Guide')}</button></div><div class="size-options" role="group" aria-label="${l('Elegir talla','Choose a size')}">${['S','M','L','XL','XXL'].map(size=>`<button data-size="${size}" aria-pressed="false">${size}</button>`).join('')}</div><p class="stock-status" id="product-stock" role="status"></p><p class="size-error" id="size-error" role="status"></p><button class="btn btn-primary detail-add" id="detail-add"><span>${l('AÑADIR AL CARRITO','ADD TO CART')}</span><span>${money(product.price)} <small>USD</small></span></button><span class="detail-shipping">${l('Envío gratis desde $120 · Pedido de prueba, sin cobro','Free shipping over $120 · Demo order, no charge')}</span><div class="product-accordions"><details><summary>${l('Detalles del producto','Product Details')} <span>+</span></summary><p>${l('Corte amplio, acabado lavado y gráfico de Zenin Club. Tallas unisex S–XXL. Las especificaciones son de ejemplo para esta tienda de prueba.','Oversized fit, washed finish, and a Zenin Club graphic. Unisex sizing S–XXL. Product specifications are placeholder copy for this concept store.')}</p></details><details><summary>${l('Talla y cuidados','Fit & Care')} <span>+</span></summary><p>${l('Elige tu talla habitual para un corte amplio. Lava con agua fría, al revés. Deja secar al aire.','Choose your regular size for an oversized fit. Wash cold, inside out. Hang dry.')}</p></details><details><summary>${l('Envíos y devoluciones','Shipping & Returns')} <span>+</span></summary><p>${l('Los pedidos se guardan para que el administrador pueda prepararlos y actualizar su estado. Esta tienda de prueba no cobra pagos ni contrata envíos reales.','Orders are saved so the administrator can prepare them and update their status. This concept store does not charge payments or book real shipping.')}</p></details></div></div></div><section class="related-products"><h2>${l('También te puede gustar','You might also like')}</h2><div class="product-grid">${products.filter(p=>p.id!==product.id).slice(0,4).map(productCard).join('')}</div></section></section>`;
 }
 function updateGrid() {
   let visible=products.filter(p=>filter==='all'||(filter==='new'?p.tag==='NEW':p.category===filter));
@@ -71,6 +72,7 @@ function updateGrid() {
   if(sort==='price-desc') visible.sort((a,b)=>b.price-a.price);
   if(sort==='name') visible.sort((a,b)=>productName(a).localeCompare(productName(b)));
   $('#product-grid').innerHTML=visible.slice(0,pageLimit).map(productCard).join('');
+  syncStockUI();
   if($('#catalog-count')) $('#catalog-count').textContent=`${visible.length} ${l('CAMISETAS. UN SOLO CLUB.','GOOD TEES. ONE GOOD CLUB.')}`;
   $$('[data-filter]').forEach(el=>{const selected=el.dataset.filter===filter;el.classList.toggle('active',selected);el.setAttribute('aria-pressed',selected);});
 }
@@ -87,7 +89,7 @@ function route(options={}) {
   document.body.classList.toggle('admin-page',routeName==='admin');
   filter='all';sort='featured';
   if(routeName==='admin'){
-    $('#view').innerHTML='<div id="admin-root"></div>';document.title=l('Administración','Admin')+' — Zenin Club';routeCleanup=mountAdmin({container:$('#admin-root'),shirtHTML,money,toast});
+    $('#view').innerHTML='<div id="admin-root"></div>';document.title=(param==='inventory'?l('Inventario','Inventory'):l('Administración','Admin'))+' — Zenin Club';routeCleanup=mountAdmin({container:$('#admin-root'),shirtHTML,money,toast,products,section:param});
   }else if(routeName==='order'){
     $('#view').innerHTML='<div id="order-root"></div>';document.title=l('Seguir pedido','Track order')+' — Zenin Club';routeCleanup=mountOrderTracking({container:$('#order-root'),id:param,token:trackingToken,shirtHTML,money,toast});
   }else if(routeName==='product') {
@@ -108,12 +110,14 @@ function route(options={}) {
   $$('video').forEach(video=>{video.addEventListener('loadeddata',()=>video.closest('.campaign-slide,.collection-feature')?.classList.add('media-loaded'),{once:true});if(video.readyState>=2)video.closest('.campaign-slide,.collection-feature')?.classList.add('media-loaded');});
   mediaObserver=new IntersectionObserver(entries=>entries.forEach(({target,isIntersecting})=>{if(target.closest('.hero-carousel'))return;if(isIntersecting&&!matchMedia('(prefers-reduced-motion:reduce)').matches)target.play().catch(()=>{});else target.pause();}),{threshold:.1});
   $$('.collection-feature video').forEach(v=>mediaObserver.observe(v));
+  syncStockUI();ensureInventory().catch(()=>{});
 }
 function openQuick(product) {
   quickContextBackup={product:activeProduct,size:chosenSize,shirt:chosenShirt};
   activeProduct=product;chosenSize='';chosenShirt=product.shirt;
-  $('#product-content').innerHTML=`<button class="close-button quick-close" data-close="product-dialog" aria-label="${l('Cerrar vista rápida','Close quick add')}">×</button><div class="quick-image">${shirtHTML(product)}</div><div class="quick-copy"><span class="detail-type">${l('Camiseta','T-Shirt')}</span><h2>${esc(productName(product))}</h2><p>${money(product.price)} USD · ${esc(colorLabel(product.shirt))}</p><div class="size-label"><span>${l('Selecciona una talla','Select a size')}</span><button class="underlined" data-info="size">${l('Guía de tallas','Size guide')} ↗</button></div><div class="size-options">${['S','M','L','XL','XXL'].map(s=>`<button data-size="${s}" aria-pressed="false">${s}</button>`).join('')}</div><p class="size-error" id="quick-size-error" role="status"></p><button class="btn btn-primary" id="quick-add-confirm">${l('AÑADIR AL CARRITO','ADD TO CART')} <span>${money(product.price)}</span></button><a class="quick-detail-link" href="#product/${product.slug}" data-close="product-dialog">${l('Ver todos los detalles','View full details')} ↗</a></div>`;
+  $('#product-content').innerHTML=`<button class="close-button quick-close" data-close="product-dialog" aria-label="${l('Cerrar vista rápida','Close quick add')}">×</button><div class="quick-image">${shirtHTML(product)}</div><div class="quick-copy"><span class="detail-type">${l('Camiseta','T-Shirt')}</span><h2>${esc(productName(product))}</h2><p>${money(product.price)} USD · ${esc(colorLabel(product.shirt))}</p><div class="size-label"><span>${l('Selecciona una talla','Select a size')}</span><button class="underlined" data-info="size">${l('Guía de tallas','Size guide')} ↗</button></div><div class="size-options">${['S','M','L','XL','XXL'].map(s=>`<button data-size="${s}" aria-pressed="false">${s}</button>`).join('')}</div><p class="stock-status" id="quick-stock" role="status"></p><p class="size-error" id="quick-size-error" role="status"></p><button class="btn btn-primary" id="quick-add-confirm">${l('AÑADIR AL CARRITO','ADD TO CART')} <span>${money(product.price)}</span></button><a class="quick-detail-link" href="#product/${product.slug}" data-close="product-dialog">${l('Ver todos los detalles','View full details')} ↗</a></div>`;
   if(!$('#product-dialog').open) $('#product-dialog').showModal();
+  syncStockUI();ensureInventory().catch(()=>{});
 }
 function selectSize(size) {
   chosenSize=size;
@@ -121,13 +125,14 @@ function selectSize(size) {
   $$('[data-size]', scope).forEach(el=>{const selected=el.dataset.size===size;el.classList.toggle('selected',selected);el.setAttribute('aria-pressed',selected)});
   if($('#chosen-size', scope)) $('#chosen-size', scope).textContent=size || l('Selecciona tu talla','Select your size');
   if($('.size-error', scope)) $('.size-error', scope).textContent='';
+  syncStockUI();
 }
 function addSelected() {
   const scope = $('#product-dialog').open ? $('#product-dialog') : $('#view');
   if(!chosenSize){$('.size-error', scope).textContent=l('Selecciona tu talla para añadir la camiseta.','Pick your size first. Your tee is waiting.');return;}
   const selection={id:activeProduct.id,size:chosenSize,shirt:chosenShirt};
-  if($('#product-dialog').open) $('#product-dialog').close();
-  commerce.addItem(selection.id,selection.size,1,selection.shirt);
+  const added=commerce.addItem(selection.id,selection.size,1,selection.shirt);
+  if(added&&$('#product-dialog').open) $('#product-dialog').close();
 }
 function infoData(){return {
   account:{title:l('Tus pedidos','Your orders'),body:`<p>${l('Consulta tus pedidos y su estado desde cualquier dispositivo.','Check your orders and their status from any device.')}</p><a class="btn btn-primary" href="#order" data-close="info-dialog">${l('SEGUIR MI PEDIDO','TRACK MY ORDER')} →</a>`},
@@ -161,7 +166,49 @@ function selectColor(value){
   $('#chosen-color').textContent=colorLabel(chosenShirt);
   $('#detail-shirt').innerHTML=shirtHTML({...activeProduct,shirt:chosenShirt,colorName:colors[chosenShirt].name});
   $$('[data-color]').forEach(el=>{const selected=+el.dataset.color===chosenShirt;el.classList.toggle('selected',selected);el.setAttribute('aria-pressed',selected);});
+  syncStockUI();
 }
+function syncStockUI(){
+  const state=getInventoryState();
+  $$('[data-add-size]').forEach(button=>{
+    const product=products.find(p=>p.id===button.dataset.product);if(!product)return;
+    const stock=getStock(product.id,product.shirt,button.dataset.addSize);
+    button.disabled=stock===null||stock===0;button.dataset.stockState=stock===null?'unknown':stock===0?'out':'ready';
+    button.title=stock===null?inventoryMessage():stock===0?l('Agotado','Sold out'):l('{count} disponibles','{count} available',{count:stock});
+  });
+  $$('[data-product-card]').forEach(card=>{
+    const product=products.find(p=>p.id===card.dataset.productCard);if(!product)return;
+    const availability=getProductAvailability(product.id),color=getProductAvailability(product.id,product.shirt);
+    let badge=$('.stock-tag',card);
+    if(availability.available===false){if(!badge){badge=document.createElement('span');badge.className='stock-tag';$('.product-image',card).append(badge);}badge.textContent=l('Agotado','Sold out');}
+    else badge?.remove();
+    const quick=$('.quick-add',card);if(quick){quick.disabled=color.available===false;quick.title=color.available===false?l('Este color está agotado. Abre el producto para ver otros colores.','This color is sold out. Open the product to see other colors.'):'';}
+  });
+  const quick=$('#product-dialog').open;
+  const scope=quick?$('#product-dialog'):$('.product-page');
+  if(!scope||!activeProduct)return;
+  const availability=getProductAvailability(activeProduct.id,chosenShirt);
+  $$('[data-size]',scope).forEach(button=>{
+    const stock=getStock(activeProduct.id,chosenShirt,button.dataset.size);
+    button.disabled=stock===null||stock===0;button.dataset.stockState=stock===null?'unknown':stock===0?'out':'ready';
+    button.title=stock===null?inventoryMessage():stock===0?l('Agotado','Sold out'):l('{count} disponibles','{count} available',{count:stock});
+  });
+  const status=$('.stock-status',scope),add=$('#quick-add-confirm',scope)||$('#detail-add',scope);
+  const stock=chosenSize?getStock(activeProduct.id,chosenShirt,chosenSize):null;
+  if(add)add.disabled=availability.available!==true||(!!chosenSize&&(stock===null||stock===0));
+  if(status){
+    status.replaceChildren();status.dataset.state='';
+    if(state.status!=='ready'){
+      const message=document.createElement('span');message.textContent=inventoryMessage();status.append(message);
+      if(state.status==='error'){status.dataset.state='error';const retry=document.createElement('button');retry.type='button';retry.dataset.stockRetry='true';retry.textContent=l('Reintentar','Retry');status.append(retry);}
+    }else if(availability.available===false){status.textContent=l('Agotado en este color. Prueba otro color.','Sold out in this color. Try another color.');status.dataset.state='out';}
+    else if(chosenSize){status.textContent=stock===0?l('Esta talla está agotada. Elige otra.','This size is sold out. Choose another.'):l('{count} unidades disponibles','{count} units available',{count:stock});status.dataset.state=stock===0?'out':stock<=3?'low':'ready';}
+    else status.textContent=l('Selecciona tu talla para ver las existencias.','Select your size to see available stock.');
+  }
+}
+window.addEventListener('zenin:inventory',syncStockUI);
+window.addEventListener('focus',()=>ensureInventory().catch(()=>{}));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)ensureInventory().catch(()=>{});});
 document.addEventListener('click',event=>{
   const target=event.target.closest('a,button');if(!target)return;
   if(target.classList.contains('skip-link')){event.preventDefault();$('#main').focus();$('#main').scrollIntoView();return;}
@@ -180,6 +227,7 @@ document.addEventListener('click',event=>{
   if(target.dataset.setLanguage&&target.dataset.setLanguage!==getLanguage())setLanguage(target.dataset.setLanguage);
   if(target.id==='detail-add'||target.id==='quick-add-confirm') addSelected();
   if(target.dataset.info) showInfo(target.dataset.info);
+  if(target.dataset.stockRetry)refreshInventory().catch(()=>{});
   if(target.classList.contains('search-toggle')){$('#search-dialog').showModal();search();$('#search-input').focus();}
   if(target.id==='menu-toggle'){const open=$('#mobile-nav').hidden;$('#mobile-nav').hidden=!open;target.setAttribute('aria-expanded',open);target.setAttribute('aria-label',open?l('Cerrar menú','Close menu'):l('Abrir menú','Open menu'));$('#menu-backdrop').hidden=!open;document.body.classList.toggle('mobile-nav-open',open);}
 });
@@ -198,7 +246,7 @@ window.addEventListener('hashchange',route);
 window.addEventListener('zenin:language',()=>{
   applyStaticLanguage();
   const routeName=location.hash.slice(1).split('/')[0];
-  if(['admin','order'].includes(routeName))document.title=l(routeName==='admin'?'Administración':'Seguir pedido',routeName==='admin'?'Admin':'Track order')+' — Zenin Club';
+  if(['admin','order'].includes(routeName)){const inventory=routeName==='admin'&&location.hash.split('/')[1]==='inventory';document.title=(inventory?l('Inventario','Inventory'):l(routeName==='admin'?'Administración':'Seguir pedido',routeName==='admin'?'Admin':'Track order'))+' — Zenin Club';}
   else if(products.length){
     const previous={size:chosenSize,shirt:chosenShirt,scroll:window.scrollY,quick:$('#product-dialog').open?{product:activeProduct,size:chosenSize}:null};
     route({keepDialogs:true,keepScroll:true});
@@ -207,6 +255,7 @@ window.addEventListener('zenin:language',()=>{
     window.scrollTo({top:previous.scroll,behavior:'instant'});
   }
   if($('#search-dialog').open)search();
+  syncStockUI();
 });
 async function init(){
   applyStaticLanguage();
@@ -217,6 +266,7 @@ async function init(){
     storefront=initStorefrontUI({onSort:key=>{sort=key;updateGrid();}});
     const updateCount=()=>{$$('.bag-count').forEach(el=>el.textContent=commerce.getCount());};
     commerce.onChange(updateCount);updateCount();route();
+    ensureInventory().catch(()=>{});
   }catch(error){console.error(error);$('#view').innerHTML=`<div class="load-error"><h1>${l('El club está tomando un descanso.','The club is taking a breather.')}</h1><p>${l('Recarga para volver a ver las camisetas.','Please reload to get the tees back.')}</p><button class="btn btn-primary" onclick="location.reload()">${l('REINTENTAR','TRY AGAIN')} ↗</button></div>`;}
 }
 init();

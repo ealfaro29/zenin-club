@@ -1,5 +1,5 @@
 import { API_BASE_URL } from './config.js?v=40';
-import { l } from './i18n.js?v=40';
+import { l, productName, colorLabel } from './i18n.js?v=40';
 
 export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   if (!API_BASE_URL) {
@@ -12,7 +12,7 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
   let response;
   try {
-    response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/${String(path).replace(/^\/+/, '')}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'omit' });
+    response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/${String(path).replace(/^\/+/, '')}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'omit', cache: 'no-store' });
   } catch (cause) {
     const error = new Error(l('No pudimos conectar con el servidor. Revisa tu conexión y vuelve a intentarlo.', 'We could not connect to the server. Check your connection and try again.'));
     error.code = 'NETWORK_ERROR';
@@ -56,6 +56,7 @@ export function apiErrorMessage(error) {
     INVALID_PRODUCT: l('Una de las camisetas ya no está disponible. Revisa tu bolsa.', 'One of the tees is unavailable. Please review your bag.'),
     INVALID_COLOR: l('Elige un color de camiseta válido.', 'Choose a valid shirt color.'),
     INVALID_SIZE: l('Elige una talla válida.', 'Choose a valid size.'),
+    INVENTORY_UNAVAILABLE: l('No pudimos verificar el stock. Reintenta antes de comprar.', 'We could not verify stock. Please retry before buying.'),
     INVALID_QUANTITY: l('El pedido permite hasta 50 camisetas y hasta 10 de cada combinación.', 'Orders allow up to 50 tees and up to 10 of each combination.'),
     INVALID_DISCOUNT: l('El código de descuento no es válido.', 'The discount code is invalid.'),
     INVALID_LANGUAGE: l('Selecciona español o inglés.', 'Choose Spanish or English.'),
@@ -76,6 +77,11 @@ export function apiErrorMessage(error) {
     METHOD_NOT_ALLOWED: l('Esta acción no está disponible.', 'This action is unavailable.'),
     ORDER_RESPONSE_INCOMPLETE: l('El servidor no confirmó el pedido. Reintenta para comprobarlo sin duplicarlo.', 'The server did not confirm the order. Retry to check without duplicating it.'),
   };
+  if (error.code === 'INSUFFICIENT_STOCK') {
+    const items = error.details?.items || error.details?.variants || [];
+    const details = items.map(item => l('{name}, {color}, talla {size}: {available} disponibles', '{name}, {color}, size {size}: {available} available', { name: productName({ productId: item.productId, name: item.name || item.productId }), color: colorLabel(item.shirt), size: item.size, available: item.available ?? item.stock ?? 0 })).join('; ');
+    return l('No hay stock suficiente para completar el pedido. {details} Tu bolsa se conserva; ajusta las cantidades o elige otra talla.', 'There is not enough stock to complete the order. {details} Your bag is preserved; adjust quantities or choose another size.', { details: details ? `${details}.` : '' });
+  }
   if (error.code === 'INVALID_FIELD') {
     const labels = { name: l('nombre completo', 'full name'), email: l('correo electrónico', 'email'), address: l('dirección', 'address'), apartment: l('apartamento', 'apartment'), city: l('ciudad', 'city'), postal: l('código postal', 'postal code'), country: l('país', 'country'), id: l('referencia del pedido', 'order reference'), token: l('enlace de seguimiento', 'tracking link') };
     const field = labels[error.details?.field] || l('datos del formulario', 'form details');

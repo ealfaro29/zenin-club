@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "python3 -m http.server 5173 --directory docs",
-    "check": "node --check docs/admin.js && node --check docs/app.js && node --check docs/commerce.js && node --check docs/config.js && node --check docs/i18n.js && node --check docs/order-tracking.js && node --check docs/orders-api.js && node --check docs/storefront-ui.js && node --check backend/worker.js",
+    "check": "node --check docs/admin-inventory.js && node --check docs/admin.js && node --check docs/app.js && node --check docs/commerce.js && node --check docs/config.js && node --check docs/i18n.js && node --check docs/inventory.js && node --check docs/order-tracking.js && node --check docs/orders-api.js && node --check docs/storefront-ui.js && node --check backend/worker.js",
     "test": "node --test backend/tests.mjs",
     "db:migrate": "wrangler d1 execute zenin-club-orders --remote --file=backend/schema.sql --config=backend/wrangler.toml",
     "deploy:api": "wrangler deploy --config=backend/wrangler.toml"

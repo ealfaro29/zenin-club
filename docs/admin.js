@@ -1,5 +1,6 @@
 import { l, getLanguage, formatMoney, formatDate, statusLabel, productName, colorLabel } from './i18n.js?v=40';
-import { apiRequest, apiErrorMessage } from './orders-api.js?v=40';
+import { apiRequest, apiErrorMessage } from './orders-api.js?v=42';
+import { createAdminInventory } from './admin-inventory.js?v=42';
 
 const SESSION_KEY = 'zenin-admin-session-v1';
 const STATUSES = ['new', 'preparing', 'ready', 'shipped', 'cancelled'];
@@ -11,9 +12,12 @@ const statusPill = value => `<span class="admin-status admin-status-${STATUSES.i
 const countryName = value => { try { return new Intl.DisplayNames([getLanguage()], { type: 'region' }).of(value) || value; } catch { return value; } };
 
 /** Server-backed orders administration. The server owns credential and token validation. */
-export function mountAdmin({ container, shirtHTML, toast } = {}) {
+export function mountAdmin({ container, shirtHTML, toast, products = [], section } = {}) {
   if (!container) throw new Error('The admin container is required.');
   let alive = true;
+  let inventory;
+  let pendingHref = '';
+  const activeTab = section === 'inventory' ? 'inventory' : 'orders';
   let token = '';
   let expiresAt = 0;
   let listSequence = 0;
@@ -40,6 +44,7 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
   const announce = message => { if (typeof toast === 'function') toast(message); };
   const clearAuth = (expired = false) => {
     token = ''; expiresAt = 0; listSequence++; detailSequence++; mutationSequence++;
+    inventory?.reset(); pendingHref = '';
     try { sessionStorage.removeItem(SESSION_KEY); } catch { /* No persistent session to clear. */ }
     state.orders = []; state.total = 0; state.selectedId = null; state.order = null;
     state.actionBusy = ''; state.loginBusy = false; state.loginError = '';
@@ -48,7 +53,7 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
   };
   const isUnauthorized = error => error?.status === 401 || error?.status === 403;
   const errorText = error => apiErrorMessage(error || {});
-  const headerHTML = () => `<header class="admin-header"><div><span class="admin-eyebrow">ZENIN CLUB / ADMIN</span><h1>${l('Pedidos', 'Orders')}</h1><p>${l('Una sola bandeja para todos tus dispositivos.', 'One order inbox across all your devices.')}</p></div><div class="admin-header-actions"><a class="admin-button admin-button-light" href="#shop">${l('Ver tienda', 'View store')} <span aria-hidden="true">↗</span></a><button class="admin-button admin-button-light" data-admin-action="logout">${l('Cerrar sesión', 'Sign out')}</button></div></header>`;
+  const headerHTML = () => `<header class="admin-header"><div><span class="admin-eyebrow">ZENIN CLUB / ADMIN</span><h1>${activeTab === 'inventory' ? l('Inventario', 'Inventory') : l('Pedidos', 'Orders')}</h1><p>${activeTab === 'inventory' ? l('Disponibilidad por camiseta, color y talla. Sincronizada entre dispositivos.', 'Availability by shirt, color and size. Synced across devices.') : l('Una sola bandeja para todos tus dispositivos.', 'One order inbox across all your devices.')}</p></div><div class="admin-header-actions"><a class="admin-button admin-button-light" href="#shop">${l('Ver tienda', 'View store')} <span aria-hidden="true">↗</span></a><button class="admin-button admin-button-light" data-admin-action="logout">${l('Cerrar sesión', 'Sign out')}</button></div></header><nav class="admin-tabs" aria-label="${l('Secciones de administración', 'Admin sections')}"><a href="#admin" data-admin-tab="orders" class="${activeTab === 'orders' ? 'is-active' : ''}" ${activeTab === 'orders' ? 'aria-current="page"' : ''}>${l('Pedidos', 'Orders')}</a><a href="#admin/inventory" data-admin-tab="inventory" class="${activeTab === 'inventory' ? 'is-active' : ''}" ${activeTab === 'inventory' ? 'aria-current="page"' : ''}>${l('Inventario', 'Inventory')}</a></nav>${pendingHref ? `<div class="admin-leave-confirm" role="alert"><p>${l('Hay cambios sin guardar. ¿Descartarlos y cambiar de sección?', 'You have unsaved changes. Discard them and switch sections?')}</p><button class="admin-button admin-button-light" data-admin-action="stay-tab">${l('Seguir editando', 'Keep editing')}</button><button class="admin-button admin-button-danger" data-admin-action="leave-tab">${l('Descartar y continuar', 'Discard and continue')}</button></div>` : ''}`;
   const errorHTML = (message, retry) => message ? `<div class="admin-alert" role="alert"><span>${esc(message)}</span>${retry ? `<button class="admin-text-button" data-admin-action="${retry}">${l('Reintentar', 'Try again')}</button>` : ''}</div>` : '';
   const loginHTML = () => `<section class="admin-root admin-login"><div class="admin-login-card"><a href="#" aria-label="Zenin Club"><img class="admin-login-logo" src="assets/zenin-logo-transparent.png" alt="Zenin Club" width="80" height="77"></a><span class="admin-eyebrow">ZENIN CLUB / ADMIN</span><h1>${l('Bienvenido de vuelta', 'Welcome back')}</h1><p>${l('Inicia sesión para administrar los pedidos de la tienda.', 'Sign in to manage your store orders.')}</p>${state.loginNotice ? `<p class="admin-notice" role="status">${esc(state.loginNotice)}</p>` : ''}${errorHTML(state.loginError)}<form id="admin-login-form" class="admin-form"><label for="admin-username">${l('Usuario', 'Username')}</label><input id="admin-username" name="username" value="Admin" autocomplete="username" autocapitalize="none" spellcheck="false" required ${state.loginBusy ? 'disabled' : ''}><label for="admin-password">${l('Contraseña', 'Password')}</label><input id="admin-password" name="password" type="password" autocomplete="current-password" required ${state.loginBusy ? 'disabled' : ''}><button class="admin-button admin-button-primary" type="submit" ${state.loginBusy ? 'disabled' : ''}>${state.loginBusy ? l('Iniciando sesión…', 'Signing in…') : l('Iniciar sesión', 'Sign in')} <span aria-hidden="true">→</span></button></form><a class="admin-login-back" href="#">← ${l('Volver a la tienda', 'Back to the store')}</a></div></section>`;
   const listHTML = () => {
@@ -73,7 +78,7 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
     const active = container.contains(document.activeElement) ? document.activeElement : null;
     const focusedId = active?.id;
     const selection = typeof active?.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
-    container.innerHTML = token ? `<section class="admin-root admin-dashboard">${state.selectedId ? detailHTML() : listHTML()}</section>` : loginHTML();
+    container.innerHTML = token ? `<section class="admin-root admin-dashboard">${activeTab === 'inventory' ? headerHTML() + inventory.html() : state.selectedId ? detailHTML() : listHTML()}</section>` : loginHTML();
     if (focusedId) {
       const replacement = document.getElementById(focusedId);
       if (replacement && container.contains(replacement) && !replacement.disabled) {
@@ -139,12 +144,13 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
   async function saveOrder(body, action) {
     if (!sessionValid() || !state.order || state.actionBusy) return;
     const id = state.order.id;
+    const expectedVersion = state.order.version;
     const requestToken = token;
     const mutation = ++mutationSequence;
     detailSequence++;
     state.actionBusy = action; state.actionError = ''; render();
     try {
-      const data = await apiRequest(`/admin/orders/${encodeURIComponent(id)}`, { method: 'PATCH', token: requestToken, body });
+      const data = await apiRequest(`/admin/orders/${encodeURIComponent(id)}`, { method: 'PATCH', token: requestToken, body: { ...body, ...(Number.isInteger(expectedVersion) ? { expectedVersion } : {}) } });
       if (!alive || token !== requestToken || state.selectedId !== id) return;
       if (!data.order?.id) throw new Error(l('No pudimos confirmar el cambio. Actualiza el pedido.', 'We could not confirm the change. Refresh this order.'));
       state.order = data.order;
@@ -161,7 +167,7 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
       if (alive && token === requestToken && mutation === mutationSequence) { state.actionBusy = ''; render(); }
     }
   }
-  const refresh = quiet => state.selectedId ? loadDetail(state.selectedId, { quiet }) : loadList({ quiet });
+  const refresh = quiet => activeTab === 'inventory' ? inventory.load({ quiet }) : state.selectedId ? loadDetail(state.selectedId, { quiet }) : loadList({ quiet });
   const openOrder = id => {
     detailSequence++;
     state.selectedId = id; state.order = null; state.detailError = ''; state.actionError = '';
@@ -211,7 +217,7 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
         if (!data.token || !Number.isFinite(expiration(data.expiresAt))) throw new Error(l('El servidor no pudo iniciar una sesión válida.', 'The server could not start a valid session.'));
         token = data.token; expiresAt = expiration(data.expiresAt);
         try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token, expiresAt })); } catch { /* Keep this session in memory only. */ }
-        state.loginBusy = false; loadList();
+        state.loginBusy = false; refresh(false);
       } catch (error) {
         if (!alive) return;
         state.loginBusy = false;
@@ -229,10 +235,16 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
     }
   }
   function onClick(event) {
+    const tab = event.target.closest('a[data-admin-tab]');
+    const dirty = activeTab === 'inventory' ? inventory.hasUnsaved() : state.notesDirty || state.trackingDirty || state.statusDirty;
+    if (tab && tab.dataset.adminTab !== activeTab && dirty) { event.preventDefault(); pendingHref = tab.getAttribute('href'); render(); return; }
+    if (activeTab === 'inventory' && inventory.onClick(event)) return;
     const button = event.target.closest('button'); if (!button || !container.contains(button)) return;
     if (button.dataset.adminOrder) { openOrder(button.dataset.adminOrder); return; }
     switch (button.dataset.adminAction) {
       case 'logout': clearAuth(); break;
+      case 'stay-tab': pendingHref = ''; render(); break;
+      case 'leave-tab': { const href = pendingHref; pendingHref = ''; if (href) location.hash = href; break; }
       case 'refresh': refresh(false); break;
       case 'export': exportPage(); break;
       case 'print': printPackingSlip(); break;
@@ -245,6 +257,7 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
     }
   }
   function onInput(event) {
+    if (activeTab === 'inventory' && inventory.onInput(event)) return;
     const target = event.target;
     if (target.id === 'admin-search') {
       state.search = target.value;
@@ -262,9 +275,26 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
     }
   }
   function onChange(event) {
+    if (activeTab === 'inventory' && inventory.onChange(event)) return;
     if (event.target.id === 'admin-status-filter') { state.status = event.target.value; state.page = 1; loadList(); }
     if (event.target.id === 'admin-order-status') { state.statusDraft = event.target.value; state.statusDirty = state.statusDraft !== state.order?.status; state.cancelConfirm = false; render(); }
   }
+  inventory = createAdminInventory({ products, shirtHTML, onChange: render, announce, request: async (path, options = {}) => {
+    if (!sessionValid()) throw Object.assign(new Error(), { code: 'STALE_REQUEST' });
+    const requestToken = token;
+    try {
+      const data = await apiRequest(path, { ...options, token: requestToken });
+      if (!alive || token !== requestToken) throw Object.assign(new Error(), { code: 'STALE_REQUEST' });
+      return data;
+    } catch (error) {
+      if (alive && token === requestToken && isUnauthorized(error)) clearAuth(true);
+      throw error;
+    }
+  } });
+  const onBeforeUnload = event => {
+    if (activeTab === 'inventory' ? inventory.hasUnsaved() : state.notesDirty || state.trackingDirty || state.statusDirty) { event.preventDefault(); event.returnValue = ''; }
+  };
+  window.addEventListener('beforeunload', onBeforeUnload);
   const onVisibility = () => { if (document.visibilityState === 'visible' && token && !state.actionBusy) refresh(true); };
   const onLanguage = () => render();
   container.addEventListener('submit', onSubmit);
@@ -275,9 +305,10 @@ export function mountAdmin({ container, shirtHTML, toast } = {}) {
   window.addEventListener('zenin:language', onLanguage);
   const timer = window.setInterval(() => { if (alive && document.visibilityState === 'visible' && token && !state.actionBusy) refresh(true); }, 30000);
   render();
-  if (token) loadList();
+  if (token) refresh(false);
   return () => {
     alive = false; listSequence++; detailSequence++; mutationSequence++;
+    inventory.cleanup(); window.removeEventListener('beforeunload', onBeforeUnload);
     window.clearInterval(timer); window.clearTimeout(searchTimer);
     container.removeEventListener('submit', onSubmit); container.removeEventListener('click', onClick);
     container.removeEventListener('input', onInput); container.removeEventListener('change', onChange);
