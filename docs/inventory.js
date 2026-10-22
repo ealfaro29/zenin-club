@@ -1,5 +1,5 @@
-import { apiRequest, apiErrorMessage } from './orders-api.js?v=42';
-import { l } from './i18n.js?v=40';
+import { apiRequest } from './orders-api.js?v=44';
+import { l } from './i18n.js?v=44';
 
 const MAX_AGE = 60000;
 const SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
@@ -65,6 +65,6 @@ export function ensureInventory() {
 export function inventoryMessage() {
   if (state.status === 'ready') return '';
   if (state.status === 'idle' || state.status === 'loading') return l('Consultando disponibilidad…', 'Checking availability…');
-  return l('No pudimos verificar el stock. Reintenta antes de comprar.', 'We could not verify stock. Please retry before buying.');
+  return l('La información de stock no está disponible. Puedes continuar con tu compra.', 'Stock information is unavailable. You can still place your order.');
 }
-export const inventoryErrorMessage = () => state.error ? apiErrorMessage(state.error) : inventoryMessage();
+export const inventoryErrorMessage = () => inventoryMessage();

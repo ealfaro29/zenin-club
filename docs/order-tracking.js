@@ -1,5 +1,5 @@
-import { trackOrder, apiErrorMessage } from './orders-api.js?v=40';
-import { l, getLanguage, formatMoney, formatDate, statusLabel, productName, colorLabel } from './i18n.js?v=40';
+import { trackOrder, apiErrorMessage } from './orders-api.js?v=44';
+import { l, getLanguage, formatMoney, formatDate, statusLabel, productName, colorLabel } from './i18n.js?v=44';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 const countries = { CR: ['Costa Rica', 'Costa Rica'], US: ['Estados Unidos', 'United States'], MX: ['México', 'Mexico'], CA: ['Canadá', 'Canada'], GB: ['Reino Unido', 'United Kingdom'] };

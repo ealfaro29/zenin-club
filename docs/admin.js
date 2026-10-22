@@ -1,6 +1,6 @@
-import { l, getLanguage, formatMoney, formatDate, statusLabel, productName, colorLabel } from './i18n.js?v=40';
-import { apiRequest, apiErrorMessage } from './orders-api.js?v=42';
-import { createAdminInventory } from './admin-inventory.js?v=42';
+import { l, getLanguage, formatMoney, formatDate, statusLabel, productName, colorLabel } from './i18n.js?v=44';
+import { apiRequest, apiErrorMessage } from './orders-api.js?v=44';
+import { createAdminInventory } from './admin-inventory.js?v=44';
 
 const SESSION_KEY = 'zenin-admin-session-v1';
 const STATUSES = ['new', 'preparing', 'ready', 'shipped', 'cancelled'];
@@ -203,6 +203,7 @@ export function mountAdmin({ container, shirtHTML, toast, products = [], section
   }
 
   async function onSubmit(event) {
+    if (activeTab === 'inventory' && inventory.onSubmit(event)) return;
     const form = event.target;
     if (!container.contains(form) || !form.id?.startsWith('admin-')) return;
     event.preventDefault();

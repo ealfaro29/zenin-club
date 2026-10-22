@@ -1,7 +1,5 @@
-import products from '../docs/data/products.json' with { type: 'json' };
-
-const CATALOG = new Map(products.map(product => [product.id, product]));
 const COLORS = { 1: 'Washed Black', 2: 'Deep Teal', 3: 'Dusty Violet', 4: 'Faded Red' };
+const COLLECTIONS = { food: 'Food Court', faces: 'Mood Swings', objects: 'Everyday Objects', cars: 'After Hours' };
 const SIZES = new Set(['S', 'M', 'L', 'XL', 'XXL']);
 const STATUSES = new Set(['new', 'preparing', 'ready', 'shipped', 'cancelled']);
 const ORIGINS = new Set(['https://ealfaro29.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173']);
@@ -128,7 +126,7 @@ function orderInput(body) {
   const variants = new Map();
   let count = 0;
   for (const item of body.items) {
-    if (!object(item) || typeof item.productId !== 'string' || !CATALOG.has(item.productId)) {
+    if (!object(item) || typeof item.productId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(item.productId)) {
       failure(400, 'INVALID_PRODUCT', 'A product is unavailable.');
     }
     if (!Number.isInteger(item.shirt) || !Object.hasOwn(COLORS, item.shirt)) {
@@ -188,20 +186,8 @@ async function replayOrder(env, row, requestHash) {
   return json({ order: publicOrder(order), trackingToken: await trackingToken(env, row.id, row.idempotency_hash) });
 }
 
-const stockError = error => /INSUFFICIENT_STOCK/.test(`${error?.message || ''} ${error?.cause?.message || ''}`);
-
-async function insufficientStock(env, items) {
-  const rows = await env.DB.prepare('SELECT product_id, shirt, size, stock FROM inventory').all();
-  const availability = new Map(rows.results.map(row => [`${row.product_id}:${row.shirt}:${row.size}`, Number(row.stock)]));
-  const current = items.map(item => ({ productId: item.productId, shirt: item.shirt, size: item.size,
-    requested: item.quantity, available: availability.get(`${item.productId}:${item.shirt}:${item.size}`) ?? 0 }));
-  const shortages = current.filter(item => item.available < item.requested);
-  failure(409, 'INSUFFICIENT_STOCK', 'Some selected sizes are no longer available.',
-    { items: shortages.length ? shortages : current });
-}
-
 function inventoryKey(productId, shirt, size) {
-  if (!CATALOG.has(productId) || !/^[1-4]$/.test(String(shirt)) || !SIZES.has(size)) {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(productId) || !/^[1-4]$/.test(String(shirt)) || !SIZES.has(size)) {
     failure(404, 'INVENTORY_NOT_FOUND', 'Inventory variant was not found.');
   }
   return { productId, shirt: Number(shirt), size };
@@ -213,19 +199,22 @@ const movement = row => ({ id: Number(row.id), productId: row.product_id, shirt:
   at: row.created_at, actor: row.actor });
 
 function enrichedVariant(row, history = []) {
-  const product = CATALOG.get(row.product_id);
+  const product = JSON.parse(row.product_json);
   return { productId: row.product_id, shirt: Number(row.shirt), size: row.size, stock: Number(row.stock),
     lowStockThreshold: Number(row.low_stock_threshold), version: Number(row.version), updatedAt: row.updated_at,
-    name: product?.name || row.product_id, emoji: product?.emoji || '', colorName: COLORS[row.shirt], history };
+    name: product?.name || row.product_id, nameEs: product?.nameEs || '', emoji: product?.emoji || '',
+    colorName: COLORS[row.shirt], active: row.product_active !== 0, history };
 }
 
 async function publicInventory(env) {
-  const rows = await env.DB.prepare('SELECT product_id, shirt, size, stock FROM inventory ORDER BY product_id, shirt, size').all();
+  const rows = await env.DB.prepare(`SELECT i.product_id, i.shirt, i.size, i.stock FROM inventory i
+    JOIN products p ON p.id = i.product_id WHERE p.active = 1 ORDER BY i.product_id, i.shirt, i.size`).all();
   return json({ variants: rows.results.map(row => ({ productId: row.product_id, shirt: Number(row.shirt), size: row.size, stock: Number(row.stock) })) });
 }
 
-async function adminInventory(env) {
-  const rows = await env.DB.prepare('SELECT * FROM inventory ORDER BY product_id, shirt, size').all();
+async function adminInventory(env, includeArchived = false) {
+  const rows = await env.DB.prepare(`SELECT i.*, p.product_json, p.active AS product_active FROM inventory i
+    JOIN products p ON p.id = i.product_id ${includeArchived ? '' : 'WHERE p.active = 1'} ORDER BY i.product_id, i.shirt, i.size`).all();
   const audit = await env.DB.prepare(`SELECT * FROM (SELECT *, ROW_NUMBER() OVER
     (PARTITION BY product_id, shirt, size ORDER BY id DESC) AS audit_rank FROM inventory_movements)
     WHERE audit_rank <= 10 ORDER BY id DESC`).all();
@@ -239,12 +228,13 @@ async function adminInventory(env) {
   return json({ variants, summary: { products: new Set(variants.map(variant => variant.productId)).size,
     variants: variants.length, totalStock: variants.reduce((sum, variant) => sum + variant.stock, 0),
     outOfStock: variants.filter(variant => variant.stock === 0).length,
-    lowStock: variants.filter(variant => variant.stock > 0 && variant.stock <= variant.lowStockThreshold).length },
+    lowStock: variants.filter(variant => variant.stock <= variant.lowStockThreshold).length },
   meta: { initialStock: 12, defaultLowStockThreshold: 3, mockSeed: true } });
 }
 
 async function inventoryDetail(env, key, limit = 50) {
-  const row = await env.DB.prepare('SELECT * FROM inventory WHERE product_id = ? AND shirt = ? AND size = ?')
+  const row = await env.DB.prepare(`SELECT i.*, p.product_json, p.active AS product_active FROM inventory i
+    JOIN products p ON p.id = i.product_id WHERE i.product_id = ? AND i.shirt = ? AND i.size = ?`)
     .bind(key.productId, key.shirt, key.size).first();
   if (!row) failure(404, 'INVENTORY_NOT_FOUND', 'Inventory variant was not found.');
   const audit = await env.DB.prepare(`SELECT * FROM inventory_movements WHERE product_id = ? AND shirt = ? AND size = ?
@@ -282,6 +272,116 @@ async function updateInventory(request, env, key, actor) {
   return json({ variant: detail.variant });
 }
 
+const productFromRow = row => ({ ...JSON.parse(row.product_json), active: Number(row.active) === 1,
+  version: Number(row.version), createdAt: row.created_at, updatedAt: row.updated_at, deletedAt: row.deleted_at });
+
+async function readProducts(env, includeArchived = false, admin = false) {
+  const rows = await env.DB.prepare(`SELECT * FROM products ${includeArchived ? '' : 'WHERE active = 1'} ORDER BY created_at, id`).all();
+  return json({ products: rows.results.map(row => admin ? productFromRow(row) : JSON.parse(row.product_json)) });
+}
+
+function catalogInput(body, previous = null) {
+  const value = field => body[field] !== undefined ? body[field] : previous?.[field];
+  const category = value('category');
+  if (!Object.hasOwn(COLLECTIONS, category)) failure(400, 'INVALID_FIELD', 'Invalid category.', { field: 'category' });
+  const price = value('price');
+  if (typeof price !== 'number' || !Number.isFinite(price) || price < 0.01 || price > 10000 ||
+      Math.abs(price * 100 - Math.round(price * 100)) > 0.000001) {
+    failure(400, 'INVALID_FIELD', 'Price must be between 0.01 and 10000 with at most two decimal places.', { field: 'price' });
+  }
+  const shirt = value('shirt');
+  if (!Number.isInteger(shirt) || !Object.hasOwn(COLORS, shirt)) failure(400, 'INVALID_COLOR', 'Choose a valid shirt color.');
+  const emoji = text(value('emoji'), 'emoji', { max: 32 });
+  if (/[<>&"']/.test(emoji)) failure(400, 'INVALID_FIELD', 'Emoji cannot contain HTML.', { field: 'emoji' });
+  const accent = text(value('accent') ?? '#df3143', 'accent', { max: 7 });
+  if (!/^#[a-f0-9]{6}$/i.test(accent)) failure(400, 'INVALID_FIELD', 'Use a six-digit hex color.', { field: 'accent' });
+  const slug = text(value('slug'), 'slug', { min: 0, max: 120, optional: true });
+  if (slug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) failure(400, 'INVALID_FIELD', 'Invalid product slug.', { field: 'slug' });
+  return { name: text(value('name'), 'name', { min: 2, max: 120 }),
+    nameEs: text(value('nameEs'), 'nameEs', { min: 0, max: 120, optional: true }),
+    category, collection: COLLECTIONS[category], price: Math.round(price * 100) / 100,
+    emoji, shirt, colorName: COLORS[shirt],
+    description: text(value('description'), 'description', { min: 0, max: 2000, optional: true }),
+    descriptionEs: text(value('descriptionEs'), 'descriptionEs', { min: 0, max: 2000, optional: true }),
+    printLine: text(value('printLine'), 'printLine', { min: 0, max: 120, optional: true }),
+    tag: text(value('tag'), 'tag', { min: 0, max: 40, optional: true }), accent, slug };
+}
+
+function catalogQuantity(value, fallback, field) {
+  const quantity = value === undefined ? fallback : value;
+  if (!Number.isInteger(quantity) || quantity < 0 || quantity > 999999) failure(400, 'INVALID_FIELD', `Invalid ${field}.`, { field });
+  return quantity;
+}
+
+function catalogVersion(value) {
+  if (!Number.isSafeInteger(value) || value < 1) failure(400, 'INVALID_FIELD', 'Invalid product version.', { field: 'version' });
+  return value;
+}
+
+async function createProduct(request, env, actor) {
+  const body = await readJson(request);
+  const normalized = catalogInput(body);
+  const initialStock = catalogQuantity(body.initialStock, 12, 'initialStock');
+  const threshold = catalogQuantity(body.lowStockThreshold, 3, 'lowStockThreshold');
+  const key = text(body.idempotencyKey ?? crypto.randomUUID(), 'idempotencyKey', { min: 8, max: 128 });
+  if (!/^[A-Za-z0-9._:-]+$/.test(key)) failure(400, 'INVALID_IDEMPOTENCY_KEY', 'Invalid product creation identifier.');
+  const keyHash = await sha256(`zenin:product-create:${key}`);
+  const requestHash = await sha256(JSON.stringify({ product: normalized, initialStock, lowStockThreshold: threshold }));
+  const replay = row => {
+    if (row.creation_request_hash !== requestHash) failure(409, 'IDEMPOTENCY_CONFLICT', 'This creation identifier was used for another product.');
+    return json({ product: productFromRow(row) });
+  };
+  const existing = await env.DB.prepare('SELECT * FROM products WHERE creation_key_hash = ?').bind(keyHash).first();
+  if (existing) return replay(existing);
+  const id = `zc-${crypto.randomUUID()}`;
+  const baseSlug = normalized.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 90) || 'zenin-tee';
+  const product = { id, ...normalized, slug: normalized.slug || `${baseSlug}-${id.slice(-8)}` };
+  const now = new Date().toISOString();
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO products(id, slug, created_at, updated_at, creation_key_hash, creation_request_hash, product_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(id, product.slug, now, now, keyHash, requestHash, JSON.stringify(product)),
+      env.DB.prepare(`INSERT INTO inventory(product_id, shirt, size, stock, low_stock_threshold, updated_at, last_reason, last_actor)
+        SELECT ?, c.shirt, s.size, ?, ?, ?, 'product_created', ? FROM
+        (SELECT 1 AS shirt UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4) c CROSS JOIN
+        (SELECT 'S' AS size UNION ALL SELECT 'M' UNION ALL SELECT 'L' UNION ALL SELECT 'XL' UNION ALL SELECT 'XXL') s`)
+        .bind(id, initialStock, threshold, now, actor),
+    ]);
+  } catch (error) {
+    const winner = await env.DB.prepare('SELECT * FROM products WHERE creation_key_hash = ?').bind(keyHash).first();
+    if (winner) return replay(winner);
+    if (/products\.slug/.test(`${error?.message || ''} ${error?.cause?.message || ''}`)) failure(409, 'SLUG_TAKEN', 'That product URL is already in use.');
+    throw error;
+  }
+  return json({ product: { ...product, active: true, version: 1, createdAt: now, updatedAt: now, deletedAt: null } }, 201);
+}
+
+async function changeProduct(request, env, id) {
+  const row = await env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  if (!row) failure(404, 'PRODUCT_NOT_FOUND', 'Product was not found.');
+  const body = request.body ? await readJson(request) : {};
+  if (request.method === 'DELETE' && Number(row.active) === 0) return json({ id, archived: true, product: productFromRow(row) });
+  const version = catalogVersion(body.version);
+  if (version !== Number(row.version)) failure(409, 'PRODUCT_CHANGED', 'Product changed. Refresh and review the latest version.');
+  if (body.active !== undefined && typeof body.active !== 'boolean') failure(400, 'INVALID_FIELD', 'Invalid active state.', { field: 'active' });
+  const previous = JSON.parse(row.product_json);
+  const product = request.method === 'DELETE' ? previous : { id, ...catalogInput(body, previous) };
+  const active = request.method === 'DELETE' ? false : body.active ?? Boolean(row.active);
+  const now = new Date().toISOString();
+  let updated;
+  try {
+    updated = await env.DB.prepare(`UPDATE products SET slug = ?, active = ?, version = version + 1, updated_at = ?,
+      deleted_at = ?, product_json = ? WHERE id = ? AND version = ? RETURNING *`)
+      .bind(product.slug, active ? 1 : 0, now, active ? null : row.deleted_at || now, JSON.stringify(product), id, version).first();
+  } catch (error) {
+    if (/products\.slug/.test(`${error?.message || ''} ${error?.cause?.message || ''}`)) failure(409, 'SLUG_TAKEN', 'That product URL is already in use.');
+    throw error;
+  }
+  if (!updated) failure(409, 'PRODUCT_CHANGED', 'Product changed. Refresh and review the latest version.');
+  return json({ ...(request.method === 'DELETE' ? { id, archived: true } : {}), product: productFromRow(updated) });
+}
+
 async function createOrder(request, env) {
   requireSecret(env);
   await rateLimit(request, env, 'create', 20, 3600);
@@ -291,9 +391,12 @@ async function createOrder(request, env) {
   const requestHash = await sha256(JSON.stringify(normalized));
   const previous = await env.DB.prepare('SELECT * FROM orders WHERE idempotency_hash = ?').bind(idempotencyHash).first();
   if (previous) return replayOrder(env, previous, requestHash);
+  const catalogRows = await env.DB.prepare('SELECT id, product_json FROM products WHERE active = 1').all();
+  const catalog = new Map(catalogRows.results.map(row => [row.id, JSON.parse(row.product_json)]));
+  if (input.items.some(item => !catalog.has(item.productId))) failure(400, 'INVALID_PRODUCT', 'A product is unavailable.');
   const items = input.items.map(item => {
-    const product = CATALOG.get(item.productId);
-    return { ...item, name: product.name, emoji: product.emoji, unitPrice: product.price, colorName: COLORS[item.shirt] };
+    const product = catalog.get(item.productId);
+    return { ...item, name: product.name, nameEs: product.nameEs || '', emoji: product.emoji, unitPrice: product.price, colorName: COLORS[item.shirt] };
   });
   const subtotalCents = items.reduce((sum, item) => sum + Math.round(item.unitPrice * 100) * item.quantity, 0);
   const discountCents = input.discountCode === 'ZENIN10' ? Math.round(subtotalCents * 0.1) : 0;
@@ -314,14 +417,16 @@ async function createOrder(request, env) {
       (id, idempotency_hash, request_hash, tracking_hash, email_normalized, status, created_at, updated_at, order_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(order.id, idempotencyHash, requestHash, tokenHash, order.customer.email, order.status, now, now, JSON.stringify(order));
-    // Reservation guards and audit triggers run in this same D1 transaction.
-    // Any insufficient line aborts the order and every earlier line's deduction.
+    // Allocation and audit triggers run in this same D1 transaction. Available
+    // units are deducted down to zero; low stock never prevents a valid order.
     await env.DB.batch([insert]);
   } catch (error) {
     // A parallel checkout retry may have won the unique-key insert.
     const winner = await env.DB.prepare('SELECT * FROM orders WHERE idempotency_hash = ?').bind(idempotencyHash).first();
     if (winner) return replayOrder(env, winner, requestHash);
-    if (stockError(error)) await insufficientStock(env, items);
+    if (/INVALID_PRODUCT/.test(`${error?.message || ''} ${error?.cause?.message || ''}`)) {
+      failure(400, 'INVALID_PRODUCT', 'A product is unavailable.');
+    }
     throw error;
   }
   return json({ order: publicOrder(order), trackingToken: token }, 201);
@@ -454,15 +559,10 @@ async function adminOrder(request, env, id) {
     if (body.tracking.number !== undefined) order.tracking.number = text(body.tracking.number, 'number', { min: 0, max: 160 });
   }
   order.updatedAt = now;
-  let result;
-  try {
-    // Status and all reservation releases/reopens are one SQLite statement.
-    result = await env.DB.prepare(`UPDATE orders SET status = ?, updated_at = ?, order_json = ?, version = version + 1
-      WHERE id = ? AND version = ? RETURNING id, version`).bind(order.status, now, JSON.stringify(order), id, row.version).first();
-  } catch (error) {
-    if (stockError(error)) await insufficientStock(env, order.items);
-    throw error;
-  }
+  // Reopening allocates only available units; cancellation returns exactly that
+  // allocation, even if the order was originally placed with stock at zero.
+  const result = await env.DB.prepare(`UPDATE orders SET status = ?, updated_at = ?, order_json = ?, version = version + 1
+    WHERE id = ? AND version = ? RETURNING id, version`).bind(order.status, now, JSON.stringify(order), id, row.version).first();
   if (!result) failure(409, 'ORDER_CHANGED', 'Order changed. Refresh and try again.');
   return json({ order: { ...order, version: Number(result.version) } });
 }
@@ -478,7 +578,7 @@ export default {
       if (origin && !allowedOrigin) failure(403, 'ORIGIN_DENIED', 'This origin is not allowed.');
       if (request.method === 'OPTIONS') {
         response = new Response(null, { status: 204, headers: {
-          'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Max-Age': '600',
         } });
       } else {
@@ -488,13 +588,22 @@ export default {
         if (path === '/health' && request.method === 'GET') {
           await env.DB.prepare('SELECT 1 AS ok').first();
           response = json({ status: 'ok', storage: 'd1' });
-        } else if (path === '/inventory' && request.method === 'GET') response = await publicInventory(env);
+        } else if (path === '/products' && request.method === 'GET') response = await readProducts(env);
+        else if (path === '/inventory' && request.method === 'GET') response = await publicInventory(env);
         else if (path === '/orders' && request.method === 'POST') response = await createOrder(request, env);
         else if (path === '/orders/track' && request.method === 'POST') response = await trackOrder(request, env);
         else if (path === '/admin/login' && request.method === 'POST') response = await login(request, env);
+        else if (path === '/admin/products' || /^\/admin\/products\/[^/]+$/.test(path)) {
+          const session = await authorize(request, env);
+          if (path === '/admin/products' && request.method === 'GET') response = await readProducts(env, url.searchParams.get('includeArchived') === 'true', true);
+          else if (path === '/admin/products' && request.method === 'POST') response = await createProduct(request, env, session.sub);
+          else if (path !== '/admin/products' && ['PATCH', 'DELETE'].includes(request.method)) {
+            response = await changeProduct(request, env, path.slice('/admin/products/'.length));
+          } else failure(405, 'METHOD_NOT_ALLOWED', 'Method is not supported.');
+        }
         else if (path === '/admin/inventory' || /^\/admin\/inventory\/[^/]+\/[^/]+\/[^/]+$/.test(path)) {
           const session = await authorize(request, env);
-          if (path === '/admin/inventory' && request.method === 'GET') response = await adminInventory(env);
+          if (path === '/admin/inventory' && request.method === 'GET') response = await adminInventory(env, url.searchParams.get('includeArchived') === 'true');
           else if (path !== '/admin/inventory' && ['GET', 'PATCH'].includes(request.method)) {
             const [, , , productId, shirt, size] = path.split('/');
             const key = inventoryKey(productId, shirt, size);

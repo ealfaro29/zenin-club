@@ -9,6 +9,9 @@ import worker from './worker.js';
 
 const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
 const inventoryMigration = await readFile(new URL('./migrations/0002_inventory.sql', import.meta.url), 'utf8');
+const softStockMigration = await readFile(new URL('./migrations/0003_soft_stock.sql', import.meta.url), 'utf8');
+const catalogMigration = await readFile(new URL('./migrations/0004_products.sql', import.meta.url), 'utf8');
+const seededProducts = JSON.parse(await readFile(new URL('../docs/data/products.json', import.meta.url), 'utf8'));
 const hash = value => createHash('sha256').update(value).digest('hex');
 
 class D1Statement {
@@ -19,7 +22,11 @@ class D1Statement {
     if (this.afterRead) await this.afterRead(this.sql);
     return column ? result?.[column] ?? null : result ?? null;
   }
-  async all() { return { success: true, results: this.database.prepare(this.sql).all(...this.params) }; }
+  async all() {
+    const results = this.database.prepare(this.sql).all(...this.params);
+    if (this.afterRead) await this.afterRead(this.sql);
+    return { success: true, results };
+  }
   execute() {
     const before = this.database.prepare('SELECT total_changes() AS n').get().n;
     const result = this.database.prepare(this.sql).run(...this.params);
@@ -59,6 +66,23 @@ function checkout(overrides = {}) {
     apartment: '', city: 'San José', postal: '10101', country: 'Costa Rica' },
   items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity: 1 }],
   discountCode: '', language: 'es', idempotencyKey: crypto.randomUUID(), ...overrides };
+}
+
+// Historical fixtures model rows written before the persistent catalog existed.
+async function historicalOrder(env, body) {
+  const now = new Date().toISOString();
+  const items = body.items.map(item => {
+    const product = seededProducts.find(product => product.id === item.productId);
+    return { ...item, name: product.name, emoji: product.emoji, unitPrice: product.price, colorName: product.colorName };
+  });
+  const subtotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const order = { id: `ZC-${crypto.randomUUID()}`, createdAt: now, updatedAt: now, status: 'new', customer: body.customer,
+    items, totals: { subtotal, discount: 0, shipping: subtotal >= 120 ? 0 : 8, total: subtotal + (subtotal >= 120 ? 0 : 8), currency: 'USD' },
+    language: body.language, discountCode: '', notes: '', tracking: { carrier: '', number: '' }, history: [{ status: 'new', at: now }] };
+  await env.DB.prepare(`INSERT INTO orders(id, idempotency_hash, request_hash, tracking_hash, email_normalized, status, created_at, updated_at, order_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(order.id, hash(body.idempotencyKey), hash('historical fixture'), hash(order.id), body.customer.email,
+    order.status, now, now, JSON.stringify(order)).run();
+  return { status: 201, data: { order } };
 }
 
 async function request(env, path, { method = 'GET', body, token, ip = '192.0.2.1', origin = 'https://ealfaro29.github.io', raw } = {}) {
@@ -283,7 +307,7 @@ test('inventory exposes all 320 seeded variants while admin audit and thresholds
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), 320);
 });
 
-test('concurrent orders cannot oversell and a successful idempotent replay does not deduct twice', async t => {
+test('concurrent orders both succeed at the last unit without negative stock or duplicate allocation', async t => {
   const env = environment(); t.after(() => env.DB.close());
   const token = await adminToken(env);
   assert.equal((await adjustStock(env, token, 1)).status, 200);
@@ -298,23 +322,25 @@ test('concurrent orders cannot oversell and a successful idempotent replay does 
   };
   const results = await Promise.all(bodies.map(body => request(env, '/orders', { method: 'POST', body })));
   env.DB.afterRead = null;
-  assert.deepEqual(results.map(result => result.status).sort(), [201, 409]);
-  const rejected = results.find(result => result.status === 409);
-  assert.equal(rejected.data.error.code, 'INSUFFICIENT_STOCK');
-  assert.deepEqual(rejected.data.error.items, [{ productId: 'zc-001', shirt: 1, size: 'M', requested: 1, available: 0 }]);
+  assert.deepEqual(results.map(result => result.status), [201, 201]);
   assert.equal((await inventoryRow(env)).stock, 0);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 1);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations WHERE active = 1').first('n'), 1);
-  const winnerIndex = results.findIndex(result => result.status === 201);
-  const replay = await request(env, '/orders', { method: 'POST', body: bodies[winnerIndex] });
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 2);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations WHERE active = 1').first('n'), 2);
+  assert.equal(await env.DB.prepare('SELECT SUM(allocated_qty) AS n FROM reservation_allocations').first('n'), 1);
+  const replay = await request(env, '/orders', { method: 'POST', body: bodies[0] });
   assert.equal(replay.status, 200);
-  assert.equal(replay.data.order.id, results[winnerIndex].data.order.id);
-  assert.equal(replay.data.trackingToken, results[winnerIndex].data.trackingToken);
+  assert.equal(replay.data.order.id, results[0].data.order.id);
+  assert.equal(replay.data.trackingToken, results[0].data.trackingToken);
   assert.equal((await inventoryRow(env)).stock, 0);
-  assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory_movements WHERE kind = 'reserve'").first('n'), 1);
+  assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory_movements WHERE kind = 'reserve'").first('n'), 2);
+  assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory_movements WHERE reason = 'order_backordered' AND delta = 0").first('n'), 1);
+  for (const result of results) {
+    assert.equal((await request(env, `/admin/orders/${result.data.order.id}`, { method: 'PATCH', token, body: { status: 'cancelled' } })).status, 200);
+  }
+  assert.equal((await inventoryRow(env)).stock, 1, 'Only the single allocated unit can be restored');
 });
 
-test('an insufficient line rolls back the complete multi-item order, reservations and movements', async t => {
+test('mixed available and zero-stock lines persist their full quantities and allocate only available units', async t => {
   const env = environment(); t.after(() => env.DB.close());
   const token = await adminToken(env);
   await adjustStock(env, token, 0, { productId: 'zc-002', shirt: 2, size: 'L' });
@@ -323,14 +349,19 @@ test('an insufficient line rolls back the complete multi-item order, reservation
     { productId: 'zc-001', shirt: 1, size: 'M', quantity: 2 },
     { productId: 'zc-002', shirt: 2, size: 'L', quantity: 2 },
   ] }) });
-  assert.equal(result.status, 409); assert.equal(result.data.error.code, 'INSUFFICIENT_STOCK');
-  assert.equal((await inventoryRow(env)).stock, 12);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 0);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations').first('n'), 0);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), before);
+  assert.equal(result.status, 201);
+  assert.equal(result.data.order.items.reduce((sum, item) => sum + item.quantity, 0), 4);
+  assert.equal((await inventoryRow(env)).stock, 10);
+  assert.equal((await inventoryRow(env, 'zc-002', 2, 'L')).stock, 0);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 1);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations').first('n'), 2);
+  assert.equal(await env.DB.prepare('SELECT SUM(allocated_qty) AS n FROM reservation_allocations').first('n'), 2);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), before + 2);
+  const admin = await request(env, '/admin/inventory', { token });
+  assert.equal(admin.data.summary.lowStock, 1, 'Zero stock is included in Low stock');
 });
 
-test('cancellation returns stock once and a failed multi-line reopen rolls back every variant', async t => {
+test('cancellation returns allocations once and mixed-stock reopening always succeeds', async t => {
   const env = environment(); t.after(() => env.DB.close());
   const token = await adminToken(env);
   const created = await request(env, '/orders', { method: 'POST', body: checkout({ items: [
@@ -347,22 +378,23 @@ test('cancellation returns stock once and a failed multi-line reopen rolls back 
   assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory_movements WHERE kind = 'release'").first('n'), 2);
   await adjustStock(env, token, 0, { productId: 'zc-002', shirt: 2, size: 'L' });
   const before = await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n');
-  const failed = await status('preparing');
-  assert.equal(failed.status, 409); assert.equal(failed.data.error.code, 'INSUFFICIENT_STOCK');
-  assert.equal((await inventoryRow(env)).stock, 12);
-  assert.equal((await request(env, `/admin/orders/${id}`, { token })).data.order.status, 'cancelled');
-  assert.equal(await env.DB.prepare('SELECT SUM(active) AS n FROM reservations').first('n'), 0);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), before);
+  const reopened = await status('preparing');
+  assert.equal(reopened.status, 200);
+  assert.equal((await inventoryRow(env)).stock, 10);
+  assert.equal((await request(env, `/admin/orders/${id}`, { token })).data.order.status, 'preparing');
+  assert.equal(await env.DB.prepare('SELECT SUM(active) AS n FROM reservations').first('n'), 2);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), before + 2);
   await adjustStock(env, token, 2, { productId: 'zc-002', shirt: 2, size: 'L' });
   assert.equal((await status('ready')).status, 200);
   assert.equal((await inventoryRow(env)).stock, 10);
-  assert.equal((await inventoryRow(env, 'zc-002', 2, 'L')).stock, 0);
+  assert.equal((await inventoryRow(env, 'zc-002', 2, 'L')).stock, 2);
   assert.equal((await status('shipped')).status, 200);
   assert.equal((await inventoryRow(env)).stock, 10);
   // Returning valid reserved units remains possible after a high manual count.
   await adjustStock(env, token, 999999);
   assert.equal((await status('cancelled')).status, 200);
   assert.equal((await inventoryRow(env)).stock, 1000001);
+  assert.equal((await inventoryRow(env, 'zc-002', 2, 'L')).stock, 2, 'Unallocated units must not be invented on cancellation');
 });
 
 test('inventory adjustments enforce versions, validate quantities and retain audit history', async t => {
@@ -393,23 +425,26 @@ test('inventory adjustments enforce versions, validate quantities and retain aud
 });
 
 test('legacy inventory migration preserves orders, honors active demand and is rerunnable', async t => {
-  assert.ok(schema.endsWith(inventoryMigration), 'Fresh schema and standalone migration must match');
+  assert.ok(schema.includes(inventoryMigration), 'Fresh schema must include the inventory migration');
+  assert.ok(schema.includes(softStockMigration), 'Fresh schema must include the soft-stock migration');
+  assert.ok(schema.endsWith(catalogMigration), 'Fresh schema must include the persistent catalog migration');
   const baseSchema = schema.split('-- Inventory bootstrap')[0];
   const env = environment(undefined, baseSchema); t.after(() => env.DB.close());
   const token = await adminToken(env);
   const created = [];
   for (const quantity of [10, 8, 4]) {
-    created.push(await request(env, '/orders', { method: 'POST', body: checkout({
+    created.push(await historicalOrder(env, checkout({
       items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity }],
-    }) }));
+    })));
   }
   await request(env, `/admin/orders/${created[2].data.order.id}`, { method: 'PATCH', token, body: { status: 'cancelled' } });
-  const shipped = await request(env, '/orders', { method: 'POST', body: checkout({
+  const shipped = await historicalOrder(env, checkout({
     items: [{ productId: 'zc-002', shirt: 2, size: 'L', quantity: 2 }],
-  }) });
+  }));
   await request(env, `/admin/orders/${shipped.data.order.id}`, { method: 'PATCH', token, body: { status: 'shipped' } });
   const before = await env.DB.prepare('SELECT id, order_json, version FROM orders ORDER BY id').all();
   env.DB.database.exec(inventoryMigration);
+  env.DB.database.exec(catalogMigration);
   assert.equal((await inventoryRow(env)).stock, 0);
   assert.equal((await inventoryRow(env, 'zc-002', 2, 'L')).stock, 10);
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations').first('n'), 4);
@@ -481,4 +516,247 @@ test('audit-trigger change counts do not turn committed inventory or status upda
   assert.equal(cancelled.data.order.version, current.data.order.version + 1);
   assert.equal((await inventoryRow(env)).stock, 5);
   assert.equal((await request(env, `/admin/orders/${id}`, { token })).data.order.status, 'cancelled');
+});
+
+test('zero and partial-stock purchases succeed and cancellation restores only allocated units', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  await adjustStock(env, token, 0);
+  const zeroBody = checkout({ items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity: 10 }] });
+  const zero = await request(env, '/orders', { method: 'POST', body: zeroBody });
+  assert.equal(zero.status, 201); assert.equal(zero.data.order.items[0].quantity, 10);
+  assert.equal((await inventoryRow(env)).stock, 0);
+  const replay = await request(env, '/orders', { method: 'POST', body: zeroBody });
+  assert.equal(replay.status, 200); assert.equal(replay.data.order.id, zero.data.order.id);
+  assert.equal(await env.DB.prepare('SELECT SUM(allocated_qty) AS n FROM reservation_allocations').first('n'), 0);
+  const zeroStatus = status => request(env, `/admin/orders/${zero.data.order.id}`, { method: 'PATCH', token, body: { status } });
+  assert.equal((await zeroStatus('cancelled')).status, 200);
+  assert.equal((await inventoryRow(env)).stock, 0);
+  assert.equal((await zeroStatus('ready')).status, 200);
+  assert.equal((await zeroStatus('cancelled')).status, 200);
+  assert.equal((await inventoryRow(env)).stock, 0);
+  assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory_movements WHERE reason = 'order_backordered' AND delta = 0").first('n'), 2);
+
+  await adjustStock(env, token, 2);
+  const partial = await request(env, '/orders', { method: 'POST', body: checkout({
+    items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity: 5 }],
+  }) });
+  assert.equal(partial.status, 201); assert.equal(partial.data.order.items[0].quantity, 5);
+  assert.equal((await inventoryRow(env)).stock, 0);
+  assert.equal(await env.DB.prepare('SELECT allocated_qty FROM reservation_allocations WHERE order_id = ?')
+    .bind(partial.data.order.id).first('allocated_qty'), 2);
+  await adjustStock(env, token, 7);
+  const cancel = await request(env, `/admin/orders/${partial.data.order.id}`, { method: 'PATCH', token, body: { status: 'cancelled' } });
+  assert.equal(cancel.status, 200);
+  assert.equal((await inventoryRow(env)).stock, 9, 'Return the two allocated units, not all five requested units');
+});
+
+test('soft-stock migration backfills hard-stock allocations once and preserves zero allocations on rerun', async t => {
+  const strictSchema = schema.split('-- Soft stock bootstrap')[0];
+  const env = environment(undefined, strictSchema); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const active = await historicalOrder(env, checkout({
+    items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity: 4 }],
+  }));
+  const cancelled = await historicalOrder(env, checkout({
+    items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity: 3 }],
+  }));
+  await request(env, `/admin/orders/${cancelled.data.order.id}`, { method: 'PATCH', token, body: { status: 'cancelled' } });
+  assert.equal((await inventoryRow(env)).stock, 8);
+  const before = (await env.DB.prepare('SELECT id, order_json, version FROM orders ORDER BY id').all()).results;
+  env.DB.database.exec(softStockMigration);
+  env.DB.database.exec(catalogMigration);
+  assert.equal((await inventoryRow(env)).stock, 8);
+  assert.equal(await env.DB.prepare('SELECT allocated_qty FROM reservation_allocations WHERE order_id = ?')
+    .bind(active.data.order.id).first('allocated_qty'), 4);
+  assert.equal(await env.DB.prepare('SELECT allocated_qty FROM reservation_allocations WHERE order_id = ?')
+    .bind(cancelled.data.order.id).first('allocated_qty'), 0);
+  assert.deepEqual((await env.DB.prepare('SELECT id, order_json, version FROM orders ORDER BY id').all()).results, before);
+  env.DB.database.exec(softStockMigration);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservation_allocations').first('n'), 2);
+  await adjustStock(env, token, 0);
+  const low = await request(env, '/orders', { method: 'POST', body: checkout({
+    items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity: 5 }],
+  }) });
+  assert.equal(low.status, 201);
+  env.DB.database.exec(softStockMigration);
+  assert.equal(await env.DB.prepare('SELECT allocated_qty FROM reservation_allocations WHERE order_id = ?')
+    .bind(low.data.order.id).first('allocated_qty'), 0);
+  await request(env, `/admin/orders/${low.data.order.id}`, { method: 'PATCH', token, body: { status: 'cancelled' } });
+  assert.equal((await inventoryRow(env)).stock, 0);
+  await request(env, `/admin/orders/${active.data.order.id}`, { method: 'PATCH', token, body: { status: 'cancelled' } });
+  assert.equal((await inventoryRow(env)).stock, 4);
+  await request(env, `/admin/orders/${cancelled.data.order.id}`, { method: 'PATCH', token, body: { status: 'preparing' } });
+  assert.equal((await inventoryRow(env)).stock, 1);
+  const allocations = (await env.DB.prepare('SELECT * FROM reservation_allocations ORDER BY order_id').all()).results;
+  const movements = await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n');
+  env.DB.database.exec(schema);
+  assert.equal((await inventoryRow(env)).stock, 1, 'Rerunning the complete fresh schema must preserve soft stock');
+  assert.deepEqual((await env.DB.prepare('SELECT * FROM reservation_allocations ORDER BY order_id').all()).results, allocations);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), movements);
+  assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name IN ('reservations_insert_guard', 'reservations_reopen_guard')").first('n'), 0);
+});
+
+const productDraft = (overrides = {}) => ({ name: 'Cloud Test Tee', nameEs: 'Camiseta Nube de Prueba',
+  category: 'faces', price: 49.95, emoji: '☁️', shirt: 2, initialStock: 0, lowStockThreshold: 2,
+  description: 'A newly created tee.', descriptionEs: 'Una nueva camiseta.', printLine: 'HEAD IN THE CLOUDS',
+  idempotencyKey: crypto.randomUUID(), ...overrides });
+
+test('persistent catalog starts with the legacy products and protects creation/archive endpoints', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const catalog = await request(env, '/products');
+  assert.equal(catalog.status, 200); assert.equal(catalog.data.products.length, 16);
+  assert.equal(catalog.data.products.find(product => product.id === 'zc-001').name, 'Midnight Snack Tee');
+  assert.equal((await request(env, '/admin/products')).status, 401);
+  assert.equal((await request(env, '/admin/products', { method: 'POST', body: productDraft() })).status, 401);
+  assert.equal((await request(env, '/admin/products/zc-001', { method: 'DELETE', body: { version: 1 } })).status, 401);
+  assert.equal((await request(env, '/admin/products/zc-001', { method: 'PATCH', body: { version: 1, active: false } })).status, 401);
+  const token = await adminToken(env);
+  for (const fields of [{ price: 0 }, { price: -1 }, { price: '20' }, { price: 1.001 }, { price: 10001 },
+    { emoji: '<img src=x onerror=alert(1)>' }, { category: 'invalid' }, { accent: 'red; x' }, { initialStock: -1 }]) {
+    const response = await request(env, '/admin/products', { method: 'POST', token, body: productDraft(fields) });
+    assert.equal(response.status, 400, JSON.stringify(fields));
+  }
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first('n'), 16);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory').first('n'), 320);
+});
+
+test('created products have all variants and their Spanish names/prices are snapshotted on zero-stock purchases', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const created = await request(env, '/admin/products', { method: 'POST', token, body: productDraft() });
+  assert.equal(created.status, 201);
+  const product = created.data.product;
+  assert.match(product.id, /^zc-[0-9a-f-]{36}$/); assert.equal(product.active, true); assert.equal(product.version, 1);
+  assert.equal(product.nameEs, 'Camiseta Nube de Prueba'); assert.equal(product.collection, 'Mood Swings');
+  assert.equal((await request(env, '/products')).data.products.length, 17);
+  const variants = (await request(env, '/inventory')).data.variants.filter(variant => variant.productId === product.id);
+  assert.equal(variants.length, 20); assert.ok(variants.every(variant => variant.stock === 0));
+  const detail = await request(env, `/admin/inventory/${product.id}/4/XL`, { token });
+  assert.equal(detail.status, 200); assert.equal(detail.data.variant.nameEs, product.nameEs);
+  assert.equal(detail.data.history[0].actor, 'Admin'); assert.equal(detail.data.history[0].reason, 'product_created');
+  const order = await request(env, '/orders', { method: 'POST', body: checkout({
+    items: [{ productId: product.id, shirt: 4, size: 'XL', quantity: 2, unitPrice: 0.01 }],
+  }) });
+  assert.equal(order.status, 201);
+  assert.equal(order.data.order.items[0].name, product.name); assert.equal(order.data.order.items[0].nameEs, product.nameEs);
+  assert.equal(order.data.order.items[0].unitPrice, 49.95); assert.equal(order.data.order.items[0].colorName, 'Faded Red');
+  assert.equal(order.data.order.totals.total, 107.9);
+  assert.equal((await inventoryRow(env, product.id, 4, 'XL')).stock, 0);
+});
+
+test('product creation retries are idempotent and do not recreate inventory or accept reused identifiers', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const body = productDraft({ initialStock: 6 });
+  const parallel = await Promise.all([request(env, '/admin/products', { method: 'POST', token, body }),
+    request(env, '/admin/products', { method: 'POST', token, body })]);
+  assert.deepEqual(parallel.map(response => response.status).sort(), [200, 201]);
+  const product = parallel[0].data.product;
+  assert.equal(parallel[1].data.product.id, product.id);
+  await adjustStock(env, token, 1, { productId: product.id });
+  const replay = await request(env, '/admin/products', { method: 'POST', token, body });
+  assert.equal(replay.status, 200); assert.equal(replay.data.product.id, product.id);
+  assert.equal((await inventoryRow(env, product.id)).stock, 1);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory WHERE product_id = ?').bind(product.id).first('n'), 20);
+  assert.equal((await request(env, '/admin/products', { method: 'POST', token,
+    body: { ...body, name: 'Different request' } })).data.error.code, 'IDEMPOTENCY_CONFLICT');
+  const duplicateSlug = await request(env, '/admin/products', { method: 'POST', token,
+    body: productDraft({ slug: 'midnight-snack-tee' }) });
+  assert.equal(duplicateSlug.status, 409); assert.equal(duplicateSlug.data.error.code, 'SLUG_TAKEN');
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first('n'), 17);
+});
+
+test('archiving hides products/variants but preserves order snapshots, audit and idempotent recovery', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const createBody = productDraft();
+  const created = await request(env, '/admin/products', { method: 'POST', token, body: createBody });
+  const product = created.data.product;
+  const orderBody = checkout({ items: [{ productId: product.id, shirt: 1, size: 'M', quantity: 2 }] });
+  const purchased = await request(env, '/orders', { method: 'POST', body: orderBody });
+  const auditBefore = await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements WHERE product_id = ?').bind(product.id).first('n');
+  const archived = await request(env, `/admin/products/${product.id}`, { method: 'DELETE', token, body: { version: product.version } });
+  assert.equal(archived.status, 200); assert.equal(archived.data.archived, true); assert.equal(archived.data.id, product.id);
+  assert.equal(archived.data.product.version, 2);
+  assert.equal((await request(env, '/products')).data.products.some(item => item.id === product.id), false);
+  assert.equal((await request(env, '/inventory')).data.variants.some(item => item.productId === product.id), false);
+  assert.equal((await request(env, '/admin/inventory', { token })).data.variants.some(item => item.productId === product.id), false);
+  assert.equal((await request(env, '/admin/inventory?includeArchived=true', { token })).data.variants.filter(item => item.productId === product.id).length, 20);
+  assert.equal((await request(env, `/admin/inventory/${product.id}/1/M`, { token })).data.variant.active, false);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements WHERE product_id = ?').bind(product.id).first('n'), auditBefore);
+  const tracked = await request(env, '/orders/track', { method: 'POST', body: { id: purchased.data.order.id, token: purchased.data.trackingToken } });
+  assert.equal(tracked.data.order.items[0].nameEs, product.nameEs);
+  const recovered = await request(env, '/orders', { method: 'POST', body: orderBody });
+  assert.equal(recovered.status, 200); assert.equal(recovered.data.order.id, purchased.data.order.id);
+  assert.equal((await request(env, '/orders', { method: 'POST', body: { ...orderBody, idempotencyKey: crypto.randomUUID() } })).data.error.code, 'INVALID_PRODUCT');
+  assert.equal((await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: 'unknown-id', shirt: 1, size: 'M', quantity: 1 }] }) })).data.error.code, 'INVALID_PRODUCT');
+  const repeated = await request(env, `/admin/products/${product.id}`, { method: 'DELETE', token, body: { version: 1 } });
+  assert.equal(repeated.status, 200); assert.equal(repeated.data.product.version, 2);
+  const creationReplay = await request(env, '/admin/products', { method: 'POST', token, body: createBody });
+  assert.equal(creationReplay.status, 200); assert.equal(creationReplay.data.product.active, false);
+  const restored = await request(env, `/admin/products/${product.id}`, { method: 'PATCH', token, body: { version: 2, active: true } });
+  assert.equal(restored.status, 200); assert.equal(restored.data.product.version, 3);
+  assert.equal((await request(env, '/products')).data.products.some(item => item.id === product.id), true);
+  const edited = await request(env, `/admin/products/${product.id}`, { method: 'PATCH', token,
+    body: { version: 3, nameEs: 'Nombre actualizado', price: 60 } });
+  assert.equal(edited.status, 200); assert.equal(edited.data.product.price, 60);
+  assert.equal((await request(env, `/admin/products/${product.id}`, { method: 'DELETE', token, body: { version: 3 } })).data.error.code, 'PRODUCT_CHANGED');
+  const stillOriginal = await request(env, '/orders/track', { method: 'POST', body: { id: purchased.data.order.id, token: purchased.data.trackingToken } });
+  assert.equal(stillOriginal.data.order.items[0].nameEs, product.nameEs);
+  assert.equal(stillOriginal.data.order.items[0].unitPrice, 49.95);
+});
+
+test('empty catalogs and edited seed rows survive migration reruns and a fresh database connection', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'zenin-catalog-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'catalog.sqlite');
+  const env = environment(path);
+  const token = await adminToken(env);
+  const order = await request(env, '/orders', { method: 'POST', body: checkout() });
+  const before = (await env.DB.prepare('SELECT order_json FROM orders WHERE id = ?').bind(order.data.order.id).first()).order_json;
+  const edited = await request(env, '/admin/products/zc-001', { method: 'PATCH', token, body: { version: 1, name: 'Changed seed name' } });
+  assert.equal(edited.status, 200);
+  env.DB.database.exec(catalogMigration);
+  assert.equal((await request(env, '/products')).data.products.find(product => product.id === 'zc-001').name, 'Changed seed name');
+  env.DB.database.exec("UPDATE products SET active = 0, deleted_at = '2026-10-21T00:00:00Z', version = version + 1");
+  env.DB.database.exec(catalogMigration);
+  assert.deepEqual((await request(env, '/products')).data.products, []);
+  env.DB.close();
+  env.DB = new D1Adapter(path); t.after(() => env.DB.close());
+  assert.deepEqual((await request(env, '/products')).data.products, []);
+  assert.deepEqual((await request(env, '/inventory')).data.variants, []);
+  assert.equal((await request(env, '/admin/products?includeArchived=true', { token })).data.products.length, 16);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory').first('n'), 320);
+  assert.equal((await env.DB.prepare('SELECT order_json FROM orders WHERE id = ?').bind(order.data.order.id).first()).order_json, before);
+});
+
+test('product and inventory creation roll back together if a database trigger rejects a variant', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  env.DB.database.exec("CREATE TRIGGER test_product_atomicity BEFORE INSERT ON inventory WHEN NEW.product_id LIKE 'zc-%-%' AND NEW.size = 'XL' BEGIN SELECT RAISE(ABORT, 'TEST_VARIANT_FAILURE'); END");
+  const result = await request(env, '/admin/products', { method: 'POST', token, body: productDraft() });
+  assert.equal(result.status, 500);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first('n'), 16);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory').first('n'), 320);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), 320);
+});
+
+test('an archive committed after the checkout catalog read prevents a new order atomically', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  let archived = false;
+  env.DB.afterRead = async sql => {
+    if (sql !== 'SELECT id, product_json FROM products WHERE active = 1') return;
+    env.DB.afterRead = null;
+    const result = await request(env, '/admin/products/zc-001', { method: 'DELETE', token, body: { version: 1 } });
+    assert.equal(result.status, 200);
+    archived = true;
+  };
+  const result = await request(env, '/orders', { method: 'POST', body: checkout() });
+  assert.equal(archived, true);
+  assert.equal(result.status, 400); assert.equal(result.data.error.code, 'INVALID_PRODUCT');
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 0);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations').first('n'), 0);
+  assert.equal((await inventoryRow(env)).stock, 12);
 });

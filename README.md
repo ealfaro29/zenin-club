@@ -2,18 +2,18 @@
 
 [Store](https://ealfaro29.github.io/zenin-club/) · [Admin](https://ealfaro29.github.io/zenin-club/#admin) · [Inventory](https://ealfaro29.github.io/zenin-club/#admin/inventory) · [Repository](https://github.com/ealfaro29/zenin-club)
 
-A bilingual Zenin Club concept store with 16 graphic tees, product/color/size selection, a persistent bag, checkout, customer tracking, and shared order and inventory administration. The storefront, checkout and admin use a dark theme. Spanish is the default; visitors can switch to English and retain their preference.
+A bilingual Zenin Club concept store with a shared product catalog, product/color/size selection, a persistent bag, checkout, customer tracking, and shared order and inventory administration. The storefront, checkout and admin use a dark theme. Spanish is the default; visitors can switch to English and retain their preference.
 
 ## Architecture
 
 - **GitHub Pages** serves the static frontend from `main:/docs`, using relative assets and hash routes.
 - **Cloudflare Worker** handles checkout, tracking and authenticated admin requests. `docs/config.js` contains its public API base URL.
-- **Cloudflare D1** is the source of truth for orders, fulfillment updates and inventory across devices. Checkout sends customer contact and delivery details to the API for storage.
+- **Cloudflare D1** is the source of truth for products, orders, fulfillment updates and inventory across devices. Checkout sends customer contact and delivery details to the API for storage.
 - The browser retains the bag, language preference and customer tracking references. Admin bearer sessions use tab-scoped session storage and expire after six hours.
 
-The Worker owns product prices, names, totals and validation. Shipping is USD 8, or free from a **pre-discount** subtotal of USD 120. `ZENIN10` applies a 10% discount. Checkout retries reuse an idempotency key to prevent duplicate orders.
+The Worker owns product prices, names, totals and validation. Shipping is USD 8, or free from a **pre-discount** subtotal of USD 120. `ZENIN10` applies a 10% discount. Checkout retries reuse an idempotency key to prevent duplicate orders. Stock is informational: zero displays “Low stock” and never prevents a purchase. Orders reserve up to the available units; cancelling only returns units actually reserved.
 
-Payments are simulated: no charge is made. Product specifications remain sample content. Inventory starts with a clearly labeled demo opening balance of 12 per variant and is then managed through Admin → Inventory; active existing orders are deducted during initialization. Admin updates are saved, while shipping labels, payment processing and transactional emails are not configured.
+Payments are simulated: no charge is made. Product specifications remain sample content. The initial 16 products have a clearly labeled demo opening balance of 12 per variant, with active existing orders deducted during initialization. Admin → Inventory can create products, set opening stock, adjust existing stock and remove products from the store. Removed products retain their order history. Admin updates are saved, while shipping labels, payment processing and transactional emails are not configured.
 
 ## Local development and checks
 
@@ -56,12 +56,12 @@ GitHub Pages publishes `main` from `/docs`; pushing to `main` updates the store.
 
 | File | Responsibility |
 | --- | --- |
-| `docs/data/products.json` | Product catalog bundled into both storefront and Worker |
+| `docs/data/products.json` | Initial catalog used to seed the shared product database |
 | `docs/app.js`, `docs/storefront-ui.js` | Storefront routes, search, product selection, carousel and navigation |
 | `docs/commerce.js` | Bag, validated checkout and saved-order confirmation |
 | `docs/orders-api.js`, `docs/config.js` | API client and public endpoint configuration |
 | `docs/order-tracking.js` | Customer order lookup, status history and delivery details |
-| `docs/admin.js`, `docs/admin-inventory.js` | Shared admin session, orders, inventory adjustments and movement history |
+| `docs/admin.js`, `docs/admin-inventory.js` | Shared admin session, orders, product creation/removal, inventory adjustments and movement history |
 | `docs/inventory.js` | Cached public availability used by product, bag and checkout controls |
 | `docs/i18n.js` | Spanish/English copy, product names and formatting |
 | `docs/styles.css`, `docs/dark-theme.css` | Responsive storefront, checkout and dark theme |

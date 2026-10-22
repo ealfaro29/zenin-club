@@ -1,5 +1,5 @@
 import { API_BASE_URL } from './config.js?v=40';
-import { l, productName, colorLabel } from './i18n.js?v=40';
+import { l, productName, colorLabel } from './i18n.js?v=44';
 
 export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   if (!API_BASE_URL) {
@@ -40,6 +40,7 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   return data;
 }
 
+export const getProducts = () => apiRequest('/products');
 export const createOrder = (payload) => apiRequest('/orders', { method: 'POST', body: payload });
 export const trackOrder = ({ id, token, email }) => apiRequest('/orders/track', { method: 'POST', body: { id, ...(token ? { token } : {}), ...(email ? { email } : {}) } });
 
@@ -53,10 +54,14 @@ export function apiErrorMessage(error) {
     ORDER_NOT_FOUND: l('No encontramos ese pedido con esos datos. Revisa la referencia y tu correo.', 'We could not find that order with those details. Check the reference and your email.'),
     INVALID_CUSTOMER: l('Completa tus datos de contacto y envío.', 'Complete your contact and shipping details.'),
     INVALID_ITEMS: l('Elige entre 1 y 40 combinaciones de camisetas.', 'Choose between 1 and 40 shirt combinations.'),
-    INVALID_PRODUCT: l('Una de las camisetas ya no está disponible. Revisa tu bolsa.', 'One of the tees is unavailable. Please review your bag.'),
+    INVALID_PRODUCT: l('Un producto se retiró de la tienda. Elimínalo de tu bolsa para continuar.', 'A product was removed from the store. Remove it from your bag to continue.'),
     INVALID_COLOR: l('Elige un color de camiseta válido.', 'Choose a valid shirt color.'),
     INVALID_SIZE: l('Elige una talla válida.', 'Choose a valid size.'),
-    INVENTORY_UNAVAILABLE: l('No pudimos verificar el stock. Reintenta antes de comprar.', 'We could not verify stock. Please retry before buying.'),
+    PRODUCT_CHANGED: l('El producto cambió. Actualiza el catálogo y revisa los datos antes de guardar.', 'The product changed. Refresh the catalog and review your details before saving.'),
+    INVALID_PRODUCT_DATA: l('Revisa los datos del producto: nombre, precio, colección, color y diseño.', 'Please review the product name, price, collection, color, and graphic.'),
+    CATALOG_UNAVAILABLE: l('No pudimos cargar el catálogo actualizado. Inténtalo de nuevo.', 'We could not load the current catalog. Please try again.'),
+    PRODUCT_NOT_FOUND: l('Este producto se retiró de la tienda. Elimínalo de tu bolsa para continuar.', 'This product was removed from the store. Remove it from your bag to continue.'),
+    INVENTORY_UNAVAILABLE: l('La información de stock no está disponible. Puedes continuar con tu compra.', 'Stock information is unavailable. You can still place your order.'),
     INVALID_QUANTITY: l('El pedido permite hasta 50 camisetas y hasta 10 de cada combinación.', 'Orders allow up to 50 tees and up to 10 of each combination.'),
     INVALID_DISCOUNT: l('El código de descuento no es válido.', 'The discount code is invalid.'),
     INVALID_LANGUAGE: l('Selecciona español o inglés.', 'Choose Spanish or English.'),

@@ -1,4 +1,4 @@
-import {l} from './i18n.js?v=40';
+import {l} from './i18n.js?v=44';
 const SORT_KEYS = new Set(['featured', 'price-asc', 'price-desc', 'name']);
 let storefrontUI;
 
