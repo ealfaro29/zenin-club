@@ -4,3 +4,4 @@
 @media(max-width:390px){.language-switch{left:55px}.language-switch button{padding:3px;font-size:9px}}
 
 .nav-dropdown>button>span[data-es]{font-family:inherit;font-size:inherit;margin-left:0}
+.mobile-nav>a>span[data-es]{font-family:inherit;font-size:inherit}
