@@ -2,7 +2,7 @@ import { createCommerce } from './commerce.js?v=40';
 import { initStorefrontUI } from './storefront-ui.js?v=40';
 import {l,getLanguage,setLanguage,formatMoney,productName,colorLabel,collectionName} from './i18n.js?v=40';
 import {mountAdmin} from './admin.js?v=40';
-import {mountOrderTracking} from './order-tracking.js?v=40';
+import {mountOrderTracking} from './order-tracking.js?v=41';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
