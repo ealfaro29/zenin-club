@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101010">
+  <meta name="description" content="Zenin Club — graphic tees for your beautifully weird everyday. Explore Food Court, Mood Swings, Everyday Objects, and After Hours.">
+  <title>Zenin Club — Wear your weird</title>
+  <link rel="icon" href="assets/zenin-logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=DM+Sans:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=4">
+  <script type="module" src="app.js?v=4"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="announcement"><span>INDEPENDENT MINDS. EVERYDAY UNIFORMS.</span><span>FREE SHIPPING ON ORDERS $120+ <span aria-hidden="true">↗</span></span><span>WELCOME TO THE CLUB</span></div>
+  <header class="site-header">
+    <button class="mobile-menu icon-button" id="menu-toggle" aria-label="Open menu" aria-expanded="false"><span></span><span></span></button>
+    <nav class="desktop-nav" aria-label="Main navigation"><a href="#shop">Shop all</a><a href="#collections">Collections <span class="tiny-arrow">⌄</span></a><a href="#club">The club <span class="nav-star">✳</span></a></nav>
+    <a href="#" class="brand" aria-label="Zenin Club home"><img src="assets/zenin-logo.png" alt="Zenin Club" width="82" height="79"></a>
+    <div class="header-tools"><button class="icon-button search-toggle" aria-label="Search products"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button><span class="currency">USD $</span><button class="bag-button" data-cart-open aria-label="Open shopping bag"><span class="bag-label">Bag</span><span class="bag-count">0</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14l1 14H4L5 7Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></button></div>
+  </header>
+  <nav class="mobile-nav" id="mobile-nav" aria-label="Mobile navigation" hidden><a href="#shop">Shop all <span>↗</span></a><a href="#collections">Collections <span>↗</span></a><a href="#club">The club <span>↗</span></a></nav>
+  <main id="main" tabindex="-1"><div id="view"><div class="loading-view">ZENIN CLUB <span>Getting the good stuff ready…</span></div></div></main>
+  <footer class="site-footer">
+    <div class="footer-top"><div class="footer-brand"><img src="assets/zenin-logo.png" alt="Zenin Club" width="150" height="144"><p>A club for the beautifully weird.<br>Come as you are. Wear what you feel.</p></div><div class="footer-links"><div><h3>The good stuff</h3><a href="#shop">Shop all tees</a><a href="#collections">Our collections</a><a href="#club">Inside the club</a></div><div><h3>Need a hand?</h3><button data-info="size">Size guide</button><button data-info="shipping">Shipping & returns</button><button data-info="contact">Get in touch</button></div></div><div class="newsletter"><span class="eyebrow">GOOD EMAILS. OCCASIONALLY.</span><h3>Get in the loop.</h3><p>New drops, club news, and other good things.</p><form id="newsletter-form"><label class="sr-only" for="newsletter-email">Your email address</label><input type="email" id="newsletter-email" placeholder="Your email address" autocomplete="email" required><button type="submit" aria-label="Join the mailing list">↗</button></form><span class="newsletter-note">Join the mock club. No emails are sent.</span></div></div>
+    <div class="footer-bottom"><span>© 2026 ZENIN CLUB</span><span>MADE FOR EVERY VERSION OF YOU.</span><span>CONCEPT STORE · ALL ORDERS ARE SIMULATED</span></div>
+  </footer>
+  <dialog id="product-dialog" class="quick-dialog" aria-label="Choose your tee"><div id="product-content"></div></dialog>
+  <dialog id="cart-dialog" class="side-dialog" aria-labelledby="cart-title"><div id="cart-content"></div></dialog>
+  <dialog id="checkout-dialog" class="checkout-dialog" aria-label="Demo checkout"><div id="checkout-content"></div></dialog>
+  <dialog id="search-dialog" class="search-dialog" aria-labelledby="search-title"><div class="dialog-heading"><h2 id="search-title">Find your thing.</h2><button class="close-button" data-close="search-dialog" aria-label="Close search">×</button></div><div class="search-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="search-input" type="search" placeholder="A mood, an object, a late-night snack…" aria-label="Search tees" autocomplete="off"></div><div id="search-results"></div></dialog>
+  <dialog id="info-dialog" class="info-dialog" aria-labelledby="info-title"><div id="info-content"></div></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
