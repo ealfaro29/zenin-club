@@ -1,0 +1,13 @@
+name = "zenin-club-orders"
+main = "worker.js"
+compatibility_date = "2026-10-21"
+account_id = "740fd37c6a7741c5b502263b1f31f508"
+workers_dev = true
+
+[vars]
+ADMIN_USERNAME = "Admin"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "zenin-club-orders"
+database_id = "83dc0013-331e-4315-acb8-6a1cb449cc28"

@@ -1,44 +1,72 @@
 # Zenin Club
 
-[Live store](https://ealfaro29.github.io/zenin-club/) · [Repository](https://github.com/ealfaro29/zenin-club)
+[Store](https://ealfaro29.github.io/zenin-club/) · [Admin](https://ealfaro29.github.io/zenin-club/#admin) · [Repository](https://github.com/ealfaro29/zenin-club)
 
-A responsive streetwear concept store inspired by the expressive product presentation of [Cool Shirtz](https://shirtz.cool/) and the spare navigation and collection structure of [PLEASURES](https://pleasuresnow.com/).
+A bilingual Zenin Club concept store with 16 graphic tees, product/color/size selection, a persistent bag, checkout, customer tracking, and shared order administration. Spanish is the default; visitors can switch to English and retain their preference.
 
-## Run locally
+## Architecture
+
+- **GitHub Pages** serves the static frontend from `main:/docs`, using relative assets and hash routes.
+- **Cloudflare Worker** handles checkout, tracking and authenticated admin requests. `docs/config.js` contains its public API base URL.
+- **Cloudflare D1** is the source of truth for orders and fulfillment updates across devices. Checkout sends customer contact and delivery details to the API for storage.
+- The browser retains the bag, language preference and customer tracking references. Admin bearer sessions use tab-scoped session storage and expire after six hours.
+
+The Worker owns product prices, names, totals and validation. Shipping is USD 8, or free from a **pre-discount** subtotal of USD 120. `ZENIN10` applies a 10% discount. Checkout retries reuse an idempotency key to prevent duplicate orders.
+
+Payments are simulated: no charge is made. Product specifications and inventory remain sample content. Admin updates are saved, while shipping labels, payment processing and transactional emails are not configured.
+
+## Local development and checks
 
 ```sh
-cd '/Users/tbnalfaro/Developer/Codex Projects/29 Zenin Club'
+npm install
 npm run dev
 ```
 
-Open http://localhost:5173. No dependency installation or build step is needed. `npm run check` checks JavaScript syntax.
+Open [localhost:5173](http://localhost:5173). The frontend needs no build step. `docs/config.js` selects the order API used by local checkout; a deployed API uses the shared D1 database.
 
-## Included
+```sh
+npm run check
+npm test
+```
 
-- User-supplied Zenin Club logo and four shirt mockups, converted to optimized WebP assets
-- 16 emoji graphic tees in Food Court, Mood Swings, Everyday Objects, and After Hours
-- Responsive home, collection, and product views with hash-based links
-- Search, price/name sorting, collection filters, quick add, size guide, and four color choices
-- Browser-persistent shopping bag with quantity controls and removal
-- $8 simulated shipping, free shipping at $120, and a `ZENIN10` demo discount
-- Validated demo checkout and simulated order confirmation
-- Local newsletter signup feedback
+Use Node 22 or later. The backend tests run the actual Worker handlers against a SQLite-backed D1 adapter, covering prices, validation, idempotency, authentication, tracking privacy, concurrent admin updates, persistence, rate limits and CORS. SQLite may print an experimental-feature notice.
 
-## Mockup boundaries
+For an isolated local backend, run `npx wrangler dev --config=backend/wrangler.toml`, provide development secrets in ignored `backend/.dev.vars`, apply `backend/schema.sql` to the local D1 database, and point `docs/config.js` at the local Worker URL.
 
-This is a static demo. There is no payment provider, real inventory, order fulfillment, email service, or backend. Checkout form details stay in browser memory and are never sent to a server. The bag persists in localStorage; placing a demo order clears it. Prices, sizing, fabric/care copy, and shipping are placeholder content. Emoji are rendered by the visitor's device and may vary slightly between platforms.
+## Backend setup and deployment
 
-## Edit
+`backend/wrangler.toml` configures the `zenin-club-orders` Worker and the D1 binding `DB`. After authenticating Wrangler to the owning Cloudflare account:
 
-- `docs/data/products.json`: products and collection assignments
-- `docs/app.js`: storefront views, search, product configuration, and routing
-- `docs/commerce.js`: shopping bag and demo checkout
-- `docs/styles.css`: design and responsive layout
-- `docs/assets/`: supplied logo and shirt bases
-- `docs/.nojekyll`: serves the static store directly through GitHub Pages
+```sh
+npm run db:migrate
+npm run deploy:api
+```
 
-Original supplied files remain in `/Users/tbnalfaro/29 zenin/Shirts`.
+Configure `ADMIN_USERNAME` as a Worker variable. Store the following through interactive `wrangler secret put <NAME> --config=backend/wrangler.toml` prompts:
 
-## Deployment
+- `ADMIN_PASSWORD_SALT`: random salt of at least 16 characters
+- `ADMIN_PASSWORD_HASH`: SHA-256 hex digest of the UTF-8 string `salt:password`
+- `ADMIN_SESSION_SECRET`: random secret of at least 32 characters
 
-GitHub Pages publishes `main` from `/docs`. Push changes to `main` to update the store. The app uses relative asset paths and hash routes, so it works under `/zenin-club/` without a build step or hosting service dependencies.
+Keep the actual password, salt and session secret out of frontend files and Git. The admin login uses the configured username and password at `#admin`. Set the deployed Worker URL in `docs/config.js` and confirm its `/health` endpoint before publishing the frontend.
+
+GitHub Pages publishes `main` from `/docs`; pushing to `main` updates the store. Backend changes require their own Worker deployment. API CORS permits the GitHub Pages origin and local frontend origins on port 5173. See [backend/README.md](backend/README.md) for endpoint contracts, limits and secret-rotation behavior.
+
+## Main files
+
+| File | Responsibility |
+| --- | --- |
+| `docs/data/products.json` | Product catalog bundled into both storefront and Worker |
+| `docs/app.js`, `docs/storefront-ui.js` | Storefront routes, search, product selection, carousel and navigation |
+| `docs/commerce.js` | Bag, validated checkout and saved-order confirmation |
+| `docs/orders-api.js`, `docs/config.js` | API client and public endpoint configuration |
+| `docs/order-tracking.js` | Customer order lookup, status history and delivery details |
+| `docs/admin.js` | Admin sign-in, shared order list, status changes, private notes and tracking |
+| `docs/i18n.js` | Spanish/English copy, product names and formatting |
+| `docs/styles.css` | Responsive storefront, checkout and administration styles |
+| `backend/worker.js`, `backend/schema.sql` | Order API and D1 persistence |
+| `backend/tests.mjs` | SQLite-backed backend integration tests |
+
+## Artwork and video
+
+The store uses the supplied Zenin logo, a transparent logo cutout, four shirt mockups and emoji prints. Emoji appearance can vary by device. Topview T1 generated the landscape black-shirt hero and vertical teal-shirt UGC clips; web copies are silent H.264 and respect reduced-motion preferences. The black-shirt hero was regenerated using the logo without its rectangular background. Full-resolution originals and generation notes remain locally in ignored `output/ugc/` and `output/topview-ugc-notes.txt`.

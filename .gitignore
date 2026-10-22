@@ -3,3 +3,7 @@ node_modules/
 *.tar.gz
 *.tgz
 output/
+.wrangler/
+.dev.vars
+.env
+.env.*
