@@ -11,3 +11,7 @@ ADMIN_USERNAME = "Admin"
 binding = "DB"
 database_name = "zenin-club-orders"
 database_id = "83dc0013-331e-4315-acb8-6a1cb449cc28"
+
+[[r2_buckets]]
+binding = "DESIGNS"
+bucket_name = "zenin-club-designs"

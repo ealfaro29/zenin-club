@@ -1,8 +1,9 @@
-import { apiRequest } from './orders-api.js?v=44';
-import { l } from './i18n.js?v=44';
+import { apiRequest } from './orders-api.js?v=45';
+import { l } from './i18n.js?v=45';
 
 const MAX_AGE = 60000;
-const SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
+const validSize = size => typeof size === 'string' && size.trim().length > 0 && size.length <= 24;
+const validShirt = shirt => Number.isSafeInteger(Number(shirt)) && Number(shirt) > 0;
 const keyFor = (productId, shirt, size) => `${String(productId)}:${Number(shirt)}:${size}`;
 let variants = new Map();
 let state = { status: 'idle', updatedAt: null, error: null };
@@ -21,16 +22,18 @@ export function subscribeInventory(callback) {
 }
 export function getStock(productId, shirt, size) {
   if (state.status !== 'ready') return null;
-  if (![1, 2, 3, 4].includes(Number(shirt)) || !SIZES.includes(size)) return null;
+  if (!validShirt(shirt) || !validSize(size)) return null;
   return variants.get(keyFor(productId, shirt, size))?.stock ?? 0;
 }
 export function getProductAvailability(productId, shirt) {
   const snapshot = getInventoryState();
-  const sizes = Object.fromEntries(SIZES.map(size => [size, null]));
+  const matching=[...variants.values()].filter(variant=>variant.productId===String(productId)&&(shirt===undefined||Number(variant.shirt)===Number(shirt)));
+  const sizeNames=[...new Set(matching.map(variant=>variant.size))];
+  const sizes = Object.fromEntries(sizeNames.map(size => [size, null]));
   if (snapshot.status !== 'ready') return { ...snapshot, available: null, totalStock: null, sizes };
   let totalStock = 0;
-  for (const size of SIZES) {
-    sizes[size] = shirt === undefined ? [1, 2, 3, 4].reduce((sum, color) => sum + (getStock(productId, color, size) || 0), 0) : getStock(productId, shirt, size);
+  for (const size of sizeNames) {
+    sizes[size] = matching.filter(variant=>variant.size===size).reduce((sum,variant)=>sum+variant.stock,0);
     totalStock += sizes[size] || 0;
   }
   return { ...snapshot, available: totalStock > 0, totalStock, sizes };
@@ -44,7 +47,7 @@ export function refreshInventory() {
       if (!Array.isArray(data?.variants)) { const error = new Error(); error.code = 'INVENTORY_UNAVAILABLE'; throw error; }
       const next = new Map();
       for (const variant of data.variants) {
-        if (!variant || typeof variant.productId !== 'string' || ![1, 2, 3, 4].includes(variant.shirt) || !SIZES.includes(variant.size) || !Number.isInteger(variant.stock) || variant.stock < 0 || next.has(keyFor(variant.productId, variant.shirt, variant.size))) { const error = new Error(); error.code = 'INVENTORY_UNAVAILABLE'; throw error; }
+        if (!variant || typeof variant.productId !== 'string' || !validShirt(variant.shirt) || !validSize(variant.size) || !Number.isInteger(variant.stock) || variant.stock < 0 || next.has(keyFor(variant.productId, variant.shirt, variant.size))) { const error = new Error(); error.code = 'INVENTORY_UNAVAILABLE'; throw error; }
         next.set(keyFor(variant.productId, variant.shirt, variant.size), { ...variant });
       }
       variants = next;

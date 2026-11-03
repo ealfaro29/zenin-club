@@ -1,4 +1,4 @@
-import {l} from './i18n.js?v=44';
+import {l} from './i18n.js?v=45';
 const SORT_KEYS = new Set(['featured', 'price-asc', 'price-desc', 'name']);
 let storefrontUI;
 
@@ -59,7 +59,8 @@ export function initStorefrontUI({ onSort } = {}) {
   const syncPauseControl = () => {
     if (!home) return;
     const paused = home.paused || motionQuery.matches;
-    const label = motionQuery.matches ? l('Carrusel pausado por movimiento reducido','Slideshow paused for reduced motion') : paused ? l('Reanudar carrusel','Resume slideshow') : l('Pausar carrusel','Pause slideshow');
+    const single=home.slides.length===1;
+    const label = motionQuery.matches ? l('Video pausado por movimiento reducido','Video paused for reduced motion') : paused ? (single?l('Reanudar video','Resume video'):l('Reanudar carrusel','Resume slideshow')) : (single?l('Pausar video','Pause video'):l('Pausar carrusel','Pause slideshow'));
     for (const button of home.carousel.querySelectorAll('[data-hero-pause]')) {
       button.setAttribute('aria-pressed', String(paused));
       button.setAttribute('aria-label', label);
@@ -68,7 +69,7 @@ export function initStorefrontUI({ onSort } = {}) {
       button.classList.toggle('is-paused', paused);
     }
   };
-  const mayAdvance = () => home && !home.paused && !motionQuery.matches && !document.hidden && !home.hovered && !home.carousel.contains(document.activeElement);
+  const mayAdvance = () => home?.slides.length > 1 && !home.paused && !motionQuery.matches && !document.hidden && !home.hovered && !home.carousel.contains(document.activeElement);
   const selectSlide = (nextIndex) => {
     if (!home?.slides.length) return;
     home.index = (nextIndex + home.slides.length) % home.slides.length;

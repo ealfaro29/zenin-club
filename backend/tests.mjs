@@ -5,13 +5,18 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, createHmac } from 'node:crypto';
+import { deflateSync } from 'node:zlib';
 import worker from './worker.js';
 
 const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
 const inventoryMigration = await readFile(new URL('./migrations/0002_inventory.sql', import.meta.url), 'utf8');
 const softStockMigration = await readFile(new URL('./migrations/0003_soft_stock.sql', import.meta.url), 'utf8');
 const catalogMigration = await readFile(new URL('./migrations/0004_products.sql', import.meta.url), 'utf8');
-const seededProducts = JSON.parse(await readFile(new URL('../docs/data/products.json', import.meta.url), 'utf8'));
+const designMigration = await readFile(new URL('./migrations/0005_product_designs.sql', import.meta.url), 'utf8');
+const archiveDemoMigration = await readFile(new URL('./migrations/0006_archive_demo_catalog.sql', import.meta.url), 'utf8');
+const basesMigration = await readFile(new URL('./migrations/0007_garment_bases.sql', import.meta.url), 'utf8');
+const seededProducts = [...catalogMigration.matchAll(/, '(\{"id":.*\})' WHERE NOT EXISTS/g)]
+  .map(match => JSON.parse(match[1].replaceAll("''", "'")));
 const hash = value => createHash('sha256').update(value).digest('hex');
 
 class D1Statement {
@@ -38,7 +43,11 @@ class D1Statement {
 }
 
 class D1Adapter {
-  constructor(path = ':memory:', bootstrap = schema) { this.database = new DatabaseSync(path); this.database.exec(bootstrap); }
+  constructor(path = ':memory:', bootstrap = schema) {
+    this.database = new DatabaseSync(path); this.database.exec('PRAGMA foreign_keys=ON; BEGIN');
+    try { this.database.exec(bootstrap); this.database.exec('COMMIT'); }
+    catch (error) { this.database.exec('ROLLBACK'); throw error; }
+  }
   prepare(sql) { return new D1Statement(this.database, sql, [], this.afterRead); }
   async batch(statements) {
     this.database.exec('BEGIN');
@@ -54,11 +63,36 @@ class D1Adapter {
   close() { this.database.close(); }
 }
 
+class R2Adapter {
+  objects = new Map();
+  async put(key, bytes) { this.objects.set(key, new Uint8Array(bytes)); }
+  async get(key) { return this.objects.has(key) ? { body: this.objects.get(key) } : null; }
+}
+
 function environment(path, bootstrap = schema) {
   const salt = 'test-only-salt-2026-zenin';
-  return { DB: new D1Adapter(path, bootstrap), ADMIN_USERNAME: 'Admin', ADMIN_PASSWORD_SALT: salt,
+  const env = { DB: new D1Adapter(path, bootstrap), DESIGNS: new R2Adapter(), ADMIN_USERNAME: 'Admin', ADMIN_PASSWORD_SALT: salt,
     ADMIN_PASSWORD_HASH: hash(`${salt}:test-only-password`),
     ADMIN_SESSION_SECRET: 'test-only-session-secret-with-at-least-32-characters' };
+  if (bootstrap === schema) {
+    // Explicit historical fixtures keep legacy order/inventory coverage. The
+    // production fresh schema intentionally has no products or invented stock.
+    env.DB.database.exec(catalogMigration);
+    env.DB.database.exec(`WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM n WHERE v<16),
+      c(v) AS (VALUES(1),(2),(3),(4)),s(v) AS (VALUES('S'),('M'),('L'),('XL'),('XXL'))
+      INSERT OR IGNORE INTO inventory(product_id,shirt,size,stock,updated_at)
+      SELECT printf('zc-%03d',n.v),c.v,s.v,12,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM n,c,s;`);
+    const bytes = testPng(), id = hash(bytes), key = `designs/${id}.png`;
+    env.DESIGNS.objects.set(key, bytes);
+    env.DB.database.prepare(`INSERT OR IGNORE INTO design_assets(id,object_key,byte_length,width,height,created_at,actor) VALUES(?,?,?,2,2,'2026-01-01','fixture')`).run(id,key,bytes.length);
+    env.DB.database.prepare(`INSERT OR IGNORE INTO garment_bases(id,base_json,created_at,updated_at) VALUES('fixture-base',?,'2026-01-01','2026-01-01')`)
+      .run(JSON.stringify({name:'Historical fixture base',type:'T-shirt',weightGsm:200,sizes:['S','M','L','XL','XXL']}));
+    for (const [shirt,name] of [[1,'Washed Black'],[2,'Deep Teal'],[3,'Dusty Violet'],[4,'Faded Red']]) {
+      env.DB.database.prepare('INSERT OR IGNORE INTO garment_colors(shirt,base_id,color_json) VALUES(?,?,?)')
+        .run(shirt,'fixture-base',JSON.stringify({name,hex:'#222222',imageUrl:`https://orders.example/designs/${id}.png`}));
+    }
+  }
+  return env;
 }
 
 function checkout(overrides = {}) {
@@ -301,7 +335,7 @@ test('inventory exposes all 320 seeded variants while admin audit and thresholds
   const admin = await request(env, '/admin/inventory', { token: await adminToken(env) });
   assert.equal(admin.status, 200);
   assert.deepEqual(admin.data.summary, { products: 16, variants: 320, totalStock: 3840, outOfStock: 0, lowStock: 0 });
-  assert.deepEqual(admin.data.meta, { initialStock: 12, defaultLowStockThreshold: 3, mockSeed: true });
+  assert.deepEqual(admin.data.meta, { initialStock: 0, defaultLowStockThreshold: 3, mockSeed: false });
   assert.equal(admin.data.variants[0].history[0].kind, 'seed');
   assert.equal(admin.data.variants[0].lowStockThreshold, 3);
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), 320);
@@ -425,9 +459,11 @@ test('inventory adjustments enforce versions, validate quantities and retain aud
 });
 
 test('legacy inventory migration preserves orders, honors active demand and is rerunnable', async t => {
-  assert.ok(schema.includes(inventoryMigration), 'Fresh schema must include the inventory migration');
+  assert.ok(!schema.includes('WITH RECURSIVE product_numbers'), 'Fresh schema must not create demo inventory');
   assert.ok(schema.includes(softStockMigration), 'Fresh schema must include the soft-stock migration');
-  assert.ok(schema.endsWith(catalogMigration), 'Fresh schema must include the persistent catalog migration');
+  assert.ok(!schema.includes('midnight-snack-tee'), 'Fresh schema must not create demo products');
+  assert.ok(schema.includes(designMigration), 'Fresh schema must include the design and color migration');
+  assert.ok(schema.endsWith(basesMigration), 'Fresh schema must include the reusable bases migration');
   const baseSchema = schema.split('-- Inventory bootstrap')[0];
   const env = environment(undefined, baseSchema); t.after(() => env.DB.close());
   const token = await adminToken(env);
@@ -554,6 +590,7 @@ test('zero and partial-stock purchases succeed and cancellation restores only al
 test('soft-stock migration backfills hard-stock allocations once and preserves zero allocations on rerun', async t => {
   const strictSchema = schema.split('-- Soft stock bootstrap')[0];
   const env = environment(undefined, strictSchema); t.after(() => env.DB.close());
+  env.DB.database.exec(inventoryMigration);
   const token = await adminToken(env);
   const active = await historicalOrder(env, checkout({
     items: [{ productId: 'zc-001', shirt: 1, size: 'M', quantity: 4 }],
@@ -590,7 +627,7 @@ test('soft-stock migration backfills hard-stock allocations once and preserves z
   assert.equal((await inventoryRow(env)).stock, 1);
   const allocations = (await env.DB.prepare('SELECT * FROM reservation_allocations ORDER BY order_id').all()).results;
   const movements = await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n');
-  env.DB.database.exec(schema);
+  env.DB.database.exec('BEGIN'); env.DB.database.exec(schema); env.DB.database.exec('COMMIT');
   assert.equal((await inventoryRow(env)).stock, 1, 'Rerunning the complete fresh schema must preserve soft stock');
   assert.deepEqual((await env.DB.prepare('SELECT * FROM reservation_allocations ORDER BY order_id').all()).results, allocations);
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_movements').first('n'), movements);
@@ -598,7 +635,8 @@ test('soft-stock migration backfills hard-stock allocations once and preserves z
 });
 
 const productDraft = (overrides = {}) => ({ name: 'Cloud Test Tee', nameEs: 'Camiseta Nube de Prueba',
-  category: 'faces', price: 49.95, emoji: '☁️', shirt: 2, initialStock: 0, lowStockThreshold: 2,
+  category: 'originals', price: 49.95, designUrl: `https://orders.example/designs/${hash(testPng())}.png`,
+  availableShirts: [1,2,3,4], shirt: 2, initialStock: 0, lowStockThreshold: 2,
   description: 'A newly created tee.', descriptionEs: 'Una nueva camiseta.', printLine: 'HEAD IN THE CLOUDS',
   idempotencyKey: crypto.randomUUID(), ...overrides });
 
@@ -613,7 +651,7 @@ test('persistent catalog starts with the legacy products and protects creation/a
   assert.equal((await request(env, '/admin/products/zc-001', { method: 'PATCH', body: { version: 1, active: false } })).status, 401);
   const token = await adminToken(env);
   for (const fields of [{ price: 0 }, { price: -1 }, { price: '20' }, { price: 1.001 }, { price: 10001 },
-    { emoji: '<img src=x onerror=alert(1)>' }, { category: 'invalid' }, { accent: 'red; x' }, { initialStock: -1 }]) {
+    { designUrl: '' }, { category: 'invalid' }, { accent: 'red; x' }, { initialStock: -1 }]) {
     const response = await request(env, '/admin/products', { method: 'POST', token, body: productDraft(fields) });
     assert.equal(response.status, 400, JSON.stringify(fields));
   }
@@ -628,7 +666,7 @@ test('created products have all variants and their Spanish names/prices are snap
   assert.equal(created.status, 201);
   const product = created.data.product;
   assert.match(product.id, /^zc-[0-9a-f-]{36}$/); assert.equal(product.active, true); assert.equal(product.version, 1);
-  assert.equal(product.nameEs, 'Camiseta Nube de Prueba'); assert.equal(product.collection, 'Mood Swings');
+  assert.equal(product.nameEs, 'Camiseta Nube de Prueba'); assert.equal(product.collection, 'Zenin Originals');
   assert.equal((await request(env, '/products')).data.products.length, 17);
   const variants = (await request(env, '/inventory')).data.variants.filter(variant => variant.productId === product.id);
   assert.equal(variants.length, 20); assert.ok(variants.every(variant => variant.stock === 0));
@@ -715,7 +753,7 @@ test('empty catalogs and edited seed rows survive migration reruns and a fresh d
   const token = await adminToken(env);
   const order = await request(env, '/orders', { method: 'POST', body: checkout() });
   const before = (await env.DB.prepare('SELECT order_json FROM orders WHERE id = ?').bind(order.data.order.id).first()).order_json;
-  const edited = await request(env, '/admin/products/zc-001', { method: 'PATCH', token, body: { version: 1, name: 'Changed seed name' } });
+  const edited = await request(env, '/admin/products/zc-001', { method: 'PATCH', token, body: { version: 1, ...productDraft({ shirt: 1, name: 'Changed seed name' }) } });
   assert.equal(edited.status, 200);
   env.DB.database.exec(catalogMigration);
   assert.equal((await request(env, '/products')).data.products.find(product => product.id === 'zc-001').name, 'Changed seed name');
@@ -759,4 +797,219 @@ test('an archive committed after the checkout catalog read prevents a new order 
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 0);
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations').first('n'), 0);
   assert.equal((await inventoryRow(env)).stock, 12);
+});
+
+function pngChunk(type, data) {
+  const result = Buffer.alloc(12 + data.length);
+  result.writeUInt32BE(data.length, 0); result.write(type, 4, 4, 'ascii'); data.copy(result, 8);
+  let crc = 0xffffffff;
+  for (const byte of result.subarray(4, 8 + data.length)) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  result.writeUInt32BE((crc ^ 0xffffffff) >>> 0, result.length - 4);
+  return result;
+}
+
+function testPng(width = 2, height = 2) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+  const rows = Buffer.from([0, 255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 255]);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(rows)), pngChunk('IEND', Buffer.alloc(0))]);
+}
+
+async function uploadPng(env, token, bytes = testPng(), headers = {}) {
+  const response = await worker.fetch(new Request('https://orders.example/admin/designs', {
+    method: 'POST', headers: { 'Content-Type': 'image/png', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers }, body: bytes,
+  }), env);
+  return { status: response.status, data: await response.json() };
+}
+
+test('PNG uploads require authentication, validate the complete file and persist an immutable public R2 image', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  assert.equal((await uploadPng(env)).status, 401);
+  const token = await adminToken(env);
+  assert.equal((await uploadPng(env, token, testPng(), { 'Content-Type': 'image/svg+xml' })).status, 415);
+  assert.equal((await uploadPng(env, token, testPng(), { 'Content-Length': String(5 * 1024 * 1024 + 1) })).data.error.code, 'DESIGN_TOO_LARGE');
+  assert.equal((await uploadPng(env, token, new Uint8Array(5 * 1024 * 1024 + 1))).status, 413);
+  const corrupted = testPng(); corrupted[40] ^= 1;
+  for (const bytes of [Buffer.from('<svg/>'), testPng().subarray(0, 50), corrupted, Buffer.concat([testPng(), Buffer.from('extra')])]) {
+    const result = await uploadPng(env, token, bytes);
+    assert.equal(result.status, 400); assert.equal(result.data.error.code, 'INVALID_PNG');
+  }
+  for (const [width, height] of [[0, 2], [8193, 1], [5000, 5000]]) {
+    assert.equal((await uploadPng(env, token, testPng(width, height))).data.error.code, 'DESIGN_DIMENSIONS');
+  }
+  assert.equal(env.DESIGNS.objects.size, 1);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM design_assets').first('n'), 1);
+  const png = testPng();
+  const uploaded = await uploadPng(env, token, png);
+  assert.equal(uploaded.status, 201); assert.equal(uploaded.data.width, 2); assert.equal(uploaded.data.height, 2);
+  assert.equal(uploaded.data.byteLength, png.length);
+  assert.equal(uploaded.data.designUrl, `https://orders.example/designs/${hash(png)}.png`);
+  const retry = await uploadPng(env, token, png);
+  assert.equal(retry.data.designUrl, uploaded.data.designUrl); assert.equal(env.DESIGNS.objects.size, 1);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM design_assets').first('n'), 1);
+  const image = await worker.fetch(new Request(uploaded.data.designUrl), env);
+  assert.equal(image.status, 200); assert.equal(image.headers.get('Content-Type'), 'image/png');
+  assert.equal(image.headers.get('X-Content-Type-Options'), 'nosniff');
+  assert.match(image.headers.get('Cache-Control'), /immutable/);
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+  assert.equal((await worker.fetch(new Request(uploaded.data.designUrl, { headers: { 'If-None-Match': image.headers.get('ETag') } }), env)).status, 304);
+  const head = await worker.fetch(new Request(uploaded.data.designUrl, { method: 'HEAD' }), env);
+  assert.equal(head.status, 200); assert.equal(await head.text(), '');
+  assert.equal((await worker.fetch(new Request(`https://orders.example/designs/${'0'.repeat(64)}.png`), env)).status, 404);
+});
+
+test('PNG catalog products offer only selected colors, permit zero-stock orders and preserve design snapshots', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const uploaded = await uploadPng(env, token);
+  const draft = productDraft({ emoji: '', shirt: 1, availableShirts: [3, 1], designUrl: uploaded.data.designUrl });
+  for (const fields of [{ availableShirts: [] }, { availableShirts: [1, 1] }, { availableShirts: ['1'] },
+    { availableShirts: [1, 5] }, { availableShirts: [3] }, { designUrl: 'https://other.example/designs/x.png' },
+    { designUrl: `/designs/${'0'.repeat(64)}.png` }, { designUrl: 'not a url' }, { designUrl: '' }]) {
+    assert.equal((await request(env, '/admin/products', { method: 'POST', token, body: { ...draft, ...fields } })).status, 400);
+  }
+  const created = await request(env, '/admin/products', { method: 'POST', token, body: draft });
+  assert.equal(created.status, 201);
+  const product = created.data.product;
+  assert.equal(product.designUrl, uploaded.data.designUrl); assert.deepEqual(product.availableShirts, [1, 3]);
+  const inventory = (await request(env, '/inventory')).data.variants.filter(row => row.productId === product.id);
+  assert.equal(inventory.length, 10); assert.ok(inventory.every(row => [1, 3].includes(row.shirt) && row.stock === 0));
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM inventory WHERE product_id = ?').bind(product.id).first('n'), 10);
+  const unavailable = await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: product.id, shirt: 2, size: 'M', quantity: 1 }] }) });
+  assert.equal(unavailable.status, 400); assert.equal(unavailable.data.error.code, 'INVALID_COLOR');
+  const orderBody = checkout({ items: [{ productId: product.id, shirt: 3, size: 'M', quantity: 2 }] });
+  const purchased = await request(env, '/orders', { method: 'POST', body: orderBody });
+  assert.equal(purchased.status, 201); assert.equal(purchased.data.order.items[0].designUrl, product.designUrl);
+  assert.deepEqual(purchased.data.order.items[0].availableShirts, [1, 3]);
+  assert.equal((await inventoryRow(env, product.id, 3, 'M')).stock, 0);
+  const edited = await request(env, `/admin/products/${product.id}`, { method: 'PATCH', token,
+    body: { version: 1, availableShirts: [1, 2], shirt: 2 } });
+  assert.equal(edited.status, 200);
+  assert.equal((await request(env, '/inventory')).data.variants.filter(row => row.productId === product.id).length, 10);
+  assert.equal((await inventoryRow(env, product.id, 2, 'M')).stock, 0);
+  const archived = await request(env, `/admin/products/${product.id}`, { method: 'DELETE', token, body: { version: 2 } });
+  assert.equal(archived.status, 200);
+  for (const details of [{ token: purchased.data.trackingToken }, { email: orderBody.customer.email }]) {
+    const tracked = await request(env, '/orders/track', { method: 'POST', body: { id: purchased.data.order.id, ...details } });
+    assert.equal(tracked.data.order.items[0].designUrl, product.designUrl);
+    assert.deepEqual(tracked.data.order.items[0].availableShirts, [1, 3]);
+  }
+  const admin = await request(env, `/admin/orders/${purchased.data.order.id}`, { token });
+  assert.equal(admin.data.order.items[0].designUrl, product.designUrl);
+  assert.equal((await worker.fetch(new Request(product.designUrl), env)).status, 200);
+  const recovered = await request(env, '/orders', { method: 'POST', body: orderBody });
+  assert.equal(recovered.status, 200); assert.equal(recovered.data.order.items[0].designUrl, product.designUrl);
+  env.DB.database.exec(designMigration); env.DB.database.exec(designMigration);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM design_assets').first('n'), 1);
+});
+
+test('a color removed after the checkout catalog read is rejected without creating reservations', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const created = await request(env, '/admin/products', { method: 'POST', token, body: productDraft({ shirt: 1, availableShirts: [1, 3] }) });
+  const product = created.data.product;
+  env.DB.afterRead = async sql => {
+    if (sql !== 'SELECT id, product_json FROM products WHERE active = 1') return;
+    env.DB.afterRead = null;
+    assert.equal((await request(env, `/admin/products/${product.id}`, { method: 'PATCH', token,
+      body: { version: 1, availableShirts: [1] } })).status, 200);
+  };
+  const result = await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: product.id, shirt: 3, size: 'M', quantity: 1 }] }) });
+  assert.equal(result.status, 400); assert.equal(result.data.error.code, 'INVALID_COLOR');
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 0);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM reservations').first('n'), 0);
+});
+
+test('reusable bases have global colors, custom sizes, authenticated versioned CRUD and immutable order snapshots', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const imageUrl = productDraft().designUrl;
+  const baseBody = { name: 'Heavy cotton', type: 'T-shirt', weightGsm: 280, sizes: ['XS', 'M', 'Talla única'],
+    colors: [{ name: 'Natural', hex: '#faf2e4', imageUrl }, { name: 'Black', hex: '#111111', imageUrl }], idempotencyKey: crypto.randomUUID() };
+  assert.equal((await request(env, '/admin/bases')).status, 401);
+  assert.equal((await request(env, '/admin/bases', { method: 'POST', body: baseBody })).status, 401);
+  for (const fields of [{ sizes: [] }, { sizes: ['M','M'] }, { weightGsm: -1 }, { colors: [{ name: 'Bad', hex: '#fff', imageUrl }] }]) {
+    assert.equal((await request(env, '/admin/bases', { method: 'POST', token, body: { ...baseBody, ...fields } })).status, 400);
+  }
+  const created = await request(env, '/admin/bases', { method: 'POST', token, body: baseBody });
+  assert.equal(created.status, 201);
+  const base = created.data.base;
+  assert.ok(base.colors.every(color => color.shirt >= 100)); assert.notEqual(base.colors[0].shirt, base.colors[1].shirt);
+  assert.equal(base.version, 1); assert.deepEqual(base.sizes, ['XS','M','Talla única']);
+  assert.equal((await request(env, '/admin/bases', { method: 'POST', token, body: baseBody })).data.base.id, base.id);
+  assert.equal((await request(env, '/admin/bases', { method: 'POST', token, body: { ...baseBody, name: 'Conflicting base' } })).status, 409);
+  assert.ok((await request(env, '/bases')).data.bases.some(row => row.id === base.id));
+  const body = productDraft({ shirt: base.colors[0].shirt, availableShirts: base.colors.map(color => color.shirt) });
+  const product = (await request(env, '/admin/products', { method: 'POST', token, body })).data.product;
+  assert.equal(product.shirtOptions[0].baseId, base.id); assert.equal(product.shirtOptions[0].weightGsm, 280);
+  assert.equal('emoji' in product, false);
+  const variants = (await request(env, '/inventory')).data.variants.filter(row => row.productId === product.id);
+  assert.equal(variants.length, 6);
+  const customSize = await request(env, `/admin/inventory/${product.id}/${base.colors[0].shirt}/${encodeURIComponent('Talla única')}`, { token });
+  assert.equal(customSize.status, 200); assert.equal(customSize.data.variant.size, 'Talla única'); assert.deepEqual([...new Set(variants.map(row => row.size))].sort(), ['M','Talla única','XS']);
+  const order = await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: product.id, shirt: base.colors[0].shirt, size: 'XS', quantity: 2 }] }) });
+  assert.equal(order.status, 201); assert.equal(order.data.order.items[0].colorName, 'Natural');
+  assert.equal(order.data.order.items[0].shirtOptions.length, 1); assert.equal(order.data.order.items[0].shirtOptions[0].imageUrl, imageUrl);
+  assert.equal((await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: product.id, shirt: base.colors[0].shirt, size: 'XL', quantity: 1 }] }) })).data.error.code, 'INVALID_SIZE');
+  assert.equal((await request(env, `/admin/bases/${base.id}`, { method: 'DELETE', token, body: { version: 1 } })).data.error.code, 'BASE_IN_USE');
+  assert.equal((await request(env, `/admin/bases/${base.id}`, { method: 'PATCH', token, body: { version: 1, sizes: ['XS','M','3XL','4XL'] } })).data.error.code, 'BASE_SIZE_IN_USE');
+  assert.equal((await request(env, `/admin/bases/${base.id}`, { method: 'PATCH', token, body: { version: 1, colors: [base.colors[0]] } })).data.error.code, 'BASE_COLOR_IN_USE');
+  const edited = await request(env, `/admin/bases/${base.id}`, { method: 'PATCH', token,
+    body: { version: 1, name: 'Heavy cotton updated', colors: [...base.colors, { name: 'Green', hex: '#223322', imageUrl }] } });
+  assert.equal(edited.status, 200); assert.equal(edited.data.base.colors.length, 3); assert.equal(edited.data.base.version, 2);
+  assert.equal(edited.data.base.colors[0].shirt, base.colors[0].shirt);
+  const updatedCatalog = (await request(env, '/products')).data.products.find(row => row.id === product.id);
+  assert.equal(updatedCatalog.shirtOptions[0].baseName, 'Heavy cotton updated');
+  assert.equal((await request(env, `/admin/bases/${base.id}`, { method: 'PATCH', token, body: { version: 1, name: 'Stale update' } })).data.error.code, 'BASE_CHANGED');
+  const tracked = await request(env, '/orders/track', { method: 'POST', body: { id: order.data.order.id, token: order.data.trackingToken } });
+  assert.equal(tracked.data.order.items[0].shirtOptions[0].baseName, 'Heavy cotton');
+  assert.equal((await request(env, `/admin/products/${product.id}`, { method: 'DELETE', token, body: { version: product.version } })).status, 200);
+  const archived = await request(env, `/admin/bases/${base.id}`, { method: 'DELETE', token, body: { version: 2 } });
+  assert.equal(archived.status, 200); assert.equal(archived.data.archived, true);
+  assert.equal((await request(env, '/bases')).data.bases.some(row => row.id === base.id), false);
+  assert.ok((await request(env, '/admin/bases?includeArchived=true', { token })).data.bases.some(row => row.id === base.id));
+});
+
+test('fresh schema contains no sample catalog and base migration preserves historical orders, inventory and audit', async t => {
+  const fresh = new D1Adapter(); t.after(() => fresh.close());
+  assert.equal(await fresh.prepare('SELECT COUNT(*) AS n FROM products').first('n'), 0);
+  assert.equal(await fresh.prepare('SELECT COUNT(*) AS n FROM inventory').first('n'), 0);
+  const env = environment(); t.after(() => env.DB.close());
+  const placed = await request(env, '/orders', { method: 'POST', body: checkout() });
+  const before = {};
+  for (const table of ['orders','inventory','reservations','reservation_allocations','inventory_movements']) {
+    before[table] = (await env.DB.prepare(`SELECT * FROM ${table}`).all()).results;
+  }
+  env.DB.database.exec('BEGIN');
+  env.DB.database.exec(archiveDemoMigration); env.DB.database.exec(basesMigration);
+  env.DB.database.exec('COMMIT');
+  assert.deepEqual(env.DB.database.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.equal((await request(env, '/products')).data.products.length, 0);
+  for (const table of Object.keys(before)) assert.deepEqual((await env.DB.prepare(`SELECT * FROM ${table}`).all()).results, before[table], table);
+  const tracked = await request(env, '/orders/track', { method: 'POST', body: { id: placed.data.order.id, token: placed.data.trackingToken } });
+  assert.equal(tracked.status, 200);
+  env.DB.database.exec('BEGIN'); env.DB.database.exec(basesMigration); env.DB.database.exec('COMMIT');
+  assert.deepEqual(env.DB.database.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+test('archiving a base after its catalog read cannot create a product referring to that archived base', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env), imageUrl = productDraft().designUrl;
+  const base = (await request(env, '/admin/bases', { method: 'POST', token, body: {
+    name: 'Race base', type: 'T-shirt', weightGsm: 200, sizes: ['M'], colors: [{ name: 'Black', hex: '#000000', imageUrl }],
+  } })).data.base;
+  env.DB.afterRead = async sql => {
+    if (sql !== 'SELECT * FROM garment_colors WHERE active = 1 ORDER BY shirt') return;
+    env.DB.afterRead = null;
+    assert.equal((await request(env, `/admin/bases/${base.id}`, { method: 'DELETE', token, body: { version: 1 } })).status, 200);
+  };
+  const result = await request(env, '/admin/products', { method: 'POST', token, body: productDraft({
+    shirt: base.colors[0].shirt, availableShirts: [base.colors[0].shirt],
+  }) });
+  assert.equal(result.status, 400); assert.equal(result.data.error.code, 'INVALID_COLOR');
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first('n'), 16);
 });

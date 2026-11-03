@@ -1,5 +1,5 @@
-import { API_BASE_URL } from './config.js?v=40';
-import { l, productName, colorLabel } from './i18n.js?v=44';
+import { API_BASE_URL } from './config.js?v=45';
+import { l, productName, colorLabel } from './i18n.js?v=45';
 
 export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   if (!API_BASE_URL) {
@@ -8,11 +8,12 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
     throw error;
   }
   const headers = { Accept: 'application/json' };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const binary = typeof Blob !== 'undefined' && body instanceof Blob;
+  if (body !== undefined) headers['Content-Type'] = binary ? (body.type || 'application/octet-stream') : 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
   let response;
   try {
-    response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/${String(path).replace(/^\/+/, '')}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'omit', cache: 'no-store' });
+    response = await fetch(`${API_BASE_URL.replace(/\/+$/, '')}/${String(path).replace(/^\/+/, '')}`, { method, headers, body: body === undefined ? undefined : binary ? body : JSON.stringify(body), credentials: 'omit', cache: 'no-store' });
   } catch (cause) {
     const error = new Error(l('No pudimos conectar con el servidor. Revisa tu conexión y vuelve a intentarlo.', 'We could not connect to the server. Check your connection and try again.'));
     error.code = 'NETWORK_ERROR';
@@ -59,6 +60,18 @@ export function apiErrorMessage(error) {
     INVALID_SIZE: l('Elige una talla válida.', 'Choose a valid size.'),
     PRODUCT_CHANGED: l('El producto cambió. Actualiza el catálogo y revisa los datos antes de guardar.', 'The product changed. Refresh the catalog and review your details before saving.'),
     INVALID_PRODUCT_DATA: l('Revisa los datos del producto: nombre, precio, colección, color y diseño.', 'Please review the product name, price, collection, color, and graphic.'),
+    INVALID_BASE_DATA: l('Revisa el modelo, tipo, gramaje, tallas y colores de la camiseta base.', 'Check the shirt base model, type, fabric weight, sizes and colors.'),
+    BASE_COLOR_IN_USE: l('Este color está asociado a un producto. Retíralo de ese producto antes de quitarlo de la base.', 'This color is linked to a product. Remove it from that product before removing it from the base.'),
+    BASE_IN_USE: l('Esta base tiene productos asociados y todavía no se puede archivar.', 'This base has linked products and cannot be archived yet.'),
+    BASE_CHANGED: l('La base cambió en otro dispositivo. Actualiza los datos antes de guardar.', 'The base changed on another device. Refresh before saving.'),
+    BASE_NOT_FOUND: l('No encontramos esta camiseta base. Actualiza los datos.', 'This shirt base was not found. Refresh the data.'),
+    BASE_SIZE_IN_USE: l('Hay productos que usan las tallas de esta base. Retíralos antes de cambiar las tallas.', 'Products use this base’s sizes. Remove those products before changing sizes.'),
+    PNG_REQUIRED: l('Selecciona un archivo PNG.', 'Select a PNG file.'),
+    DESIGN_TOO_LARGE: l('El PNG supera el máximo de 5 MB.', 'The PNG exceeds the 5 MB limit.'),
+    DESIGN_DIMENSIONS: l('El PNG supera el límite de dimensiones o 16 megapíxeles.', 'The PNG exceeds the dimension or 16 megapixel limit.'),
+    INVALID_DESIGN: l('Selecciona un PNG válido de hasta 5 MB y 16 megapíxeles.', 'Choose a valid PNG up to 5 MB and 16 megapixels.'),
+    DESIGN_NOT_FOUND: l('No encontramos el diseño guardado. Vuelve a seleccionar el PNG.', 'The saved design was not found. Select the PNG again.'),
+    DESIGN_STORAGE_UNAVAILABLE: l('No pudimos guardar el diseño. Inténtalo de nuevo; tus datos se conservan.', 'The design could not be saved. Try again; your details have been kept.'),
     CATALOG_UNAVAILABLE: l('No pudimos cargar el catálogo actualizado. Inténtalo de nuevo.', 'We could not load the current catalog. Please try again.'),
     PRODUCT_NOT_FOUND: l('Este producto se retiró de la tienda. Elimínalo de tu bolsa para continuar.', 'This product was removed from the store. Remove it from your bag to continue.'),
     INVENTORY_UNAVAILABLE: l('La información de stock no está disponible. Puedes continuar con tu compra.', 'Stock information is unavailable. You can still place your order.'),

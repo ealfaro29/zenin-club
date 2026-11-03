@@ -1,73 +1,52 @@
 # Zenin Club
 
-[Store](https://ealfaro29.github.io/zenin-club/) · [Admin](https://ealfaro29.github.io/zenin-club/#admin) · [Inventory](https://ealfaro29.github.io/zenin-club/#admin/inventory) · [Repository](https://github.com/ealfaro29/zenin-club)
+Spanish/English shirt store with a shared Cloudflare D1 catalog, reusable garment bases, PNG artwork stored in Cloudflare R2, persistent orders and authenticated administration. GitHub Pages serves `/docs` from `main`.
 
-A bilingual Zenin Club concept store with a shared product catalog, product/color/size selection, a persistent bag, checkout, customer tracking, and shared order and inventory administration. The storefront, checkout and admin use a dark theme. Spanish is the default; visitors can switch to English and retain their preference.
+## Product workflow
 
-## Architecture
+1. Open **Admin → Camisetas base** (`#admin/bases`). Create a reusable model with its name, cut/type, fabric weight in g/m² and sizes. Add each color's name, swatch and blank garment PNG.
+2. Open **Admin → Productos → Agregar producto** (`#admin/inventory`). Upload the design PNG and select the base/color combinations to offer. Enter the product name and price; the cover color, English name and opening stock are optional settings.
+3. The store composes the uploaded design over each selected garment image. Product pages, cart, order tracking and administration use the same renderer. Unselected combinations cannot be purchased.
 
-- **GitHub Pages** serves the static frontend from `main:/docs`, using relative assets and hash routes.
-- **Cloudflare Worker** handles checkout, tracking and authenticated admin requests. `docs/config.js` contains its public API base URL.
-- **Cloudflare D1** is the source of truth for products, orders, fulfillment updates and inventory across devices. Checkout sends customer contact and delivery details to the API for storage.
-- The browser retains the bag, language preference and customer tracking references. Admin bearer sessions use tab-scoped session storage and expire after six hours.
+Images must be valid PNGs, up to 5 MiB, 8192 pixels per side and 16 megapixels. Transparent backgrounds and consistent square framing give the best previews. Artwork and blank images are immutable, deduplicated by SHA-256, and served through the Worker; no image files or credentials are committed to Git. Saving a base updates its shared name, type, weight and color images across the catalog. Existing order snapshots retain their original images and details.
 
-The Worker owns product prices, names, totals and validation. Shipping is USD 8, or free from a **pre-discount** subtotal of USD 120. `ZENIN10` applies a 10% discount. Checkout retries reuse an idempotency key to prevent duplicate orders. Stock is informational: zero displays “Low stock” and never prevents a purchase. Orders reserve up to the available units; cancelling only returns units actually reserved.
+Bases support custom sizes through the API. The admin offers XS–XXXL and lets you add custom size labels. Colors in use and bases referenced by active products cannot be removed; size changes are also protected while a base is in use. Products can be archived while their order history is preserved. The former emoji catalog is archived and no demonstration products are seeded into a fresh database.
 
-Payments are simulated: no charge is made. Product specifications remain sample content. The initial 16 products have a clearly labeled demo opening balance of 12 per variant, with active existing orders deducted during initialization. Admin → Inventory can create products, set opening stock, adjust existing stock and remove products from the store. Removed products retain their order history. Admin updates are saved, while shipping labels, payment processing and transactional emails are not configured.
+Stock is informational: zero displays **Low stock** and never prevents purchasing an offered combination. Orders allocate only available units; cancellation returns only the units actually allocated. The server owns names, prices, option validation and totals, and checkout retries use idempotency keys.
 
-## Local development and checks
+**Payments remain in test mode.** The current checkout saves an order without charging a card. Prices remain USD; the existing shipping rule is USD 8 or free from USD 120 before discounts, and `ZENIN10` applies a 10% discount. Real payment processing, shipping rates, tax settings, fiscal invoicing and transactional email must be configured separately. The newsletter reports that sign-up is not enabled.
+
+## Development
 
 ```sh
-npm install
+npm ci
 npm run dev
-```
-
-Open [localhost:5173](http://localhost:5173). The frontend needs no build step. `docs/config.js` selects the order API used by local checkout; a deployed API uses the shared D1 database.
-
-```sh
 npm run check
 npm test
 ```
 
-Use Node 22 or later. The backend tests run the actual Worker handlers against a SQLite-backed D1 adapter, covering prices, validation, idempotency, authentication, tracking privacy, concurrent admin updates, persistence, rate limits and CORS. SQLite may print an experimental-feature notice.
+Use Node 22 or later. The frontend is buildless and runs at `http://localhost:5173`. `docs/config.js` selects the shared API. For an isolated backend, configure ignored development secrets, apply `backend/schema.sql` to local D1, run `npx wrangler dev --config=backend/wrangler.toml`, and point a local frontend configuration to that Worker. Local Wrangler uses isolated D1 and R2 storage.
 
-For an isolated local backend, run `npx wrangler dev --config=backend/wrangler.toml`, provide development secrets in ignored `backend/.dev.vars`, apply `backend/schema.sql` to the local D1 database, and point `docs/config.js` at the local Worker URL.
+Tests run actual Worker handlers against a SQLite D1 adapter and an R2 test bucket. They cover catalog and base CRUD, PNG validation/authentication, snapshots, allowed colors/sizes, zero stock, idempotency, concurrent edits and preservation of legacy orders and allocations during migration.
 
-## Backend setup and deployment
+## Deployment
 
-`backend/wrangler.toml` configures the `zenin-club-orders` Worker and the D1 binding `DB`. After authenticating Wrangler to the owning Cloudflare account:
-
-```sh
-npm run db:migrate
-npm run deploy:api
-```
-
-Configure `ADMIN_USERNAME` as a Worker variable. Store the following through interactive `wrangler secret put <NAME> --config=backend/wrangler.toml` prompts:
-
-- `ADMIN_PASSWORD_SALT`: random salt of at least 16 characters
-- `ADMIN_PASSWORD_HASH`: SHA-256 hex digest of the UTF-8 string `salt:password`
-- `ADMIN_SESSION_SECRET`: random secret of at least 32 characters
-
-Keep the actual password, salt and session secret out of frontend files and Git. The admin login uses the configured username and password at `#admin`. Set the deployed Worker URL in `docs/config.js` and confirm its `/health` endpoint before publishing the frontend.
-
-GitHub Pages publishes `main` from `/docs`; pushing to `main` updates the store. Backend changes require their own Worker deployment. API CORS permits the GitHub Pages origin and local frontend origins on port 5173. See [backend/README.md](backend/README.md) for endpoint contracts, limits and secret-rotation behavior.
+- Frontend: GitHub Pages publishes `/docs` from `main`.
+- API: `npm run deploy:api`; the `DB` D1 and `DESIGNS` R2 bindings are configured in `backend/wrangler.toml`.
+- Apply database migrations before deploying the matching API. See `backend/README.md` for transactional migration requirements and API contracts.
+- Keep `ADMIN_PASSWORD_SALT`, `ADMIN_PASSWORD_HASH` and `ADMIN_SESSION_SECRET` as Worker secrets. `ADMIN_USERNAME` is a Worker variable. Never place secrets in frontend code or Git.
 
 ## Main files
 
 | File | Responsibility |
 | --- | --- |
-| `docs/data/products.json` | Initial catalog used to seed the shared product database |
-| `docs/app.js`, `docs/storefront-ui.js` | Storefront routes, search, product selection, carousel and navigation |
-| `docs/commerce.js` | Bag, validated checkout and saved-order confirmation |
-| `docs/orders-api.js`, `docs/config.js` | API client and public endpoint configuration |
-| `docs/order-tracking.js` | Customer order lookup, status history and delivery details |
-| `docs/admin.js`, `docs/admin-inventory.js` | Shared admin session, orders, product creation/removal, inventory adjustments and movement history |
-| `docs/inventory.js` | Cached public availability used by product, bag and checkout controls |
-| `docs/i18n.js` | Spanish/English copy, product names and formatting |
-| `docs/styles.css`, `docs/dark-theme.css` | Responsive storefront, checkout and dark theme |
-| `backend/worker.js`, `backend/schema.sql` | Order API and D1 persistence |
-| `backend/tests.mjs` | SQLite-backed backend integration tests |
-
-## Artwork and video
-
-The store uses the supplied Zenin logo, a transparent logo cutout, four shirt mockups and emoji prints. Emoji appearance can vary by device. Topview T1 generated the landscape black-shirt hero and vertical teal-shirt UGC clips; web copies are silent H.264 and respect reduced-motion preferences. The black-shirt hero was regenerated using the logo without its rectangular background. Full-resolution originals and generation notes remain locally in ignored `output/ugc/` and `output/topview-ugc-notes.txt`.
+| `docs/admin-bases.js` | Reusable garment models, colors and image uploads |
+| `docs/admin-inventory.js` | PNG product creation and per-variant stock |
+| `docs/product-design.js` | Shared garment, image and size helpers |
+| `docs/app.js`, `docs/storefront-ui.js` | Storefront and PNG composition |
+| `docs/commerce.js` | Cart, option validation and checkout |
+| `docs/admin.js`, `docs/order-tracking.js` | Administration and customer tracking |
+| `docs/orders-api.js`, `docs/config.js` | API client and public endpoint |
+| `backend/worker.js`, `backend/schema.sql` | Authoritative catalog, options, orders and storage |
+| `backend/migrations/` | Database upgrades preserving existing records |
+| `backend/tests.mjs` | Backend integration and migration tests |
