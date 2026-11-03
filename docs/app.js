@@ -253,7 +253,9 @@ function syncStockUI(){
 window.addEventListener('zenin:inventory',syncStockUI);
 window.addEventListener('focus',()=>{ensureInventory().catch(()=>{});refreshCatalog().catch(()=>{});});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){ensureInventory().catch(()=>{});refreshCatalog().catch(()=>{});}});
-window.addEventListener('zenin:catalog-changed',()=>{refreshCatalog({force:true}).catch(error=>toast(apiErrorMessage(error)));refreshInventory().catch(()=>{});});
+const refreshSharedCatalog=()=>{refreshCatalog({force:true}).catch(error=>toast(apiErrorMessage(error)));refreshInventory().catch(()=>{});};
+window.addEventListener('zenin:catalog-changed',refreshSharedCatalog);
+window.addEventListener('zenin:bases-changed',refreshSharedCatalog);
 document.addEventListener('click',event=>{
   const target=event.target.closest('a,button');if(!target)return;
   if(target.classList.contains('skip-link')){event.preventDefault();$('#main').focus();$('#main').scrollIntoView();return;}
