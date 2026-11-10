@@ -1,167 +1,735 @@
-import { getDefaultShirt, isShirtAvailable, getShirtOption, getShirtSizes } from './product-design.js?v=45';
-import { l, getLanguage, formatMoney, formatDate, statusLabel, productName, colorLabel, collectionName } from './i18n.js?v=45';
-import { createOrder, apiErrorMessage } from './orders-api.js?v=45';
-import { ensureInventory, refreshInventory, getInventoryState, getStock, inventoryMessage, inventoryErrorMessage } from './inventory.js?v=45';
+import { getDefaultShirt, isShirtAvailable, getShirtOption, getShirtSizes } from "./product-design.js?v=46";
+import {
+  l,
+  getLanguage,
+  formatMoney,
+  formatDate,
+  statusLabel,
+  productName,
+  colorLabel,
+  collectionName,
+} from "./i18n.js?v=46";
+import { createOrder, getPaymentConfig, apiErrorMessage } from "./orders-api.js?v=46";
+import {
+  ensureInventory,
+  refreshInventory,
+  getInventoryState,
+  getStock,
+  inventoryMessage,
+  inventoryErrorMessage,
+} from "./inventory.js?v=46";
 
-const CART_KEY = 'zenin-cart-v1';
-const COUNTRIES = [['CR', 'Costa Rica', 'Costa Rica'], ['US', 'Estados Unidos', 'United States'], ['MX', 'México', 'Mexico'], ['CA', 'Canadá', 'Canada'], ['GB', 'Reino Unido', 'United Kingdom']];
-const esc = (value) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
-const round = value => Math.round((value + Number.EPSILON) * 100) / 100;
-const uniqueKey = () => globalThis.crypto?.randomUUID?.() || `zenin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const CART_KEY = "zenin-cart-v1";
+const COUNTRIES = [
+  ["CR", "Costa Rica", "Costa Rica"],
+  ["US", "Estados Unidos", "United States"],
+  ["MX", "México", "Mexico"],
+  ["CA", "Canadá", "Canada"],
+  ["GB", "Reino Unido", "United Kingdom"],
+];
+const esc = (value) =>
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character],
+  );
+const PROVINCES = [
+  ["CR-SJ", "San José"],
+  ["CR-A", "Alajuela"],
+  ["CR-H", "Heredia"],
+  ["CR-C", "Cartago"],
+  ["CR-P", "Puntarenas"],
+  ["CR-G", "Guanacaste"],
+  ["CR-L", "Limón"],
+];
+const round = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+const uniqueKey = () =>
+  globalThis.crypto?.randomUUID?.() || `zenin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export function createCommerce({ products, shirtHTML, toast }) {
-  const catalog = new Map(products.map(product => [String(product.id), product]));
+  const catalog = new Map(products.map((product) => [String(product.id), product]));
   let activeIds = new Set(catalog.keys());
-  const snapshotFor = product => JSON.parse(JSON.stringify(Object.fromEntries(['id','name','nameEs','nameEn','slug','category','collection','shirt','price','colorName','description','descriptionEs','descriptionEn','tag','designUrl','designId','availableShirts','shirtOptions','sizes'].filter(key => product?.[key] !== undefined).map(key => [key, product[key]]))));
-  const archivedProduct = item => { const snapshot = item.snapshot; return snapshot && typeof snapshot.name === 'string' && Number.isFinite(snapshot.price) && snapshot.price >= 0 ? { ...snapshot, id: item.id } : { id: item.id, name: item.id, price: 0, shirt: item.shirt || 1 }; };
-  const cartDialog = document.getElementById('cart-dialog');
-  const cartContent = document.getElementById('cart-content');
-  const checkoutDialog = document.getElementById('checkout-dialog');
-  const checkoutContent = document.getElementById('checkout-content');
+  const snapshotFor = (product) =>
+    JSON.parse(
+      JSON.stringify(
+        Object.fromEntries(
+          [
+            "id",
+            "name",
+            "nameEs",
+            "nameEn",
+            "slug",
+            "category",
+            "collection",
+            "shirt",
+            "price",
+            "colorName",
+            "description",
+            "descriptionEs",
+            "descriptionEn",
+            "tag",
+            "designUrl",
+            "designId",
+            "availableShirts",
+            "shirtOptions",
+            "sizes",
+            "kind",
+            "articleType",
+            "printSides",
+            "frontDesignUrl",
+            "backDesignUrl",
+            "basePrices",
+            "collectionEs",
+          ]
+            .filter((key) => product?.[key] !== undefined)
+            .map((key) => [key, product[key]]),
+        ),
+      ),
+    );
+  const archivedProduct = (item) => {
+    const snapshot = item.snapshot;
+    return snapshot && typeof snapshot.name === "string" && Number.isFinite(snapshot.price) && snapshot.price >= 0
+      ? { ...snapshot, id: item.id }
+      : { id: item.id, name: item.id, price: 0, shirt: item.shirt || 1 };
+  };
+  const cartDialog = document.getElementById("cart-dialog");
+  const cartContent = document.getElementById("cart-content");
+  const checkoutDialog = document.getElementById("checkout-dialog");
+  const checkoutContent = document.getElementById("checkout-content");
   const subscribers = new Set();
-  const announce = message => { if (typeof toast === 'function') toast(message); };
-  let discountApplied = false, promoCode = '', promoState = '', errorMessage = '', submitting = false, confirmedOrder = null, pendingSubmission = null, orderError = null;
-  let formValues = { name: '', email: '', address: '', apartment: '', city: '', postal: '', country: 'CR' };
-  const validateCart = value => {
+  const announce = (message) => {
+    if (typeof toast === "function") toast(message);
+  };
+  let discountApplied = false,
+    promoCode = "",
+    promoState = "",
+    errorMessage = "",
+    submitting = false,
+    confirmedOrder = null,
+    pendingSubmission = null,
+    orderError = null;
+  let formValues = { name: "", email: "", phone: "", address: "", apartment: "", city: "", state: "", postal: "", country: "CR" };
+  let payments = { enabled: false };
+  let redirecting = false;
+  getPaymentConfig()
+    .then((config) => {
+      payments = { enabled: Boolean(config?.enabled), provider: config?.provider || null };
+      if (checkoutDialog?.open && !confirmedOrder && !submitting) renderCheckout();
+    })
+    .catch(() => {});
+  const validateCart = (value) => {
     if (!Array.isArray(value)) return [];
     const unique = new Map();
     for (const item of value) {
-      if (!item || typeof item.id !== 'string' || !item.id || (typeof item.size !== 'string' || !item.size.trim() || item.size.length > 24)) continue;
+      if (
+        !item ||
+        typeof item.id !== "string" ||
+        !item.id ||
+        typeof item.size !== "string" ||
+        !item.size.trim() ||
+        item.size.length > 24
+      )
+        continue;
       const quantity = Number(item.quantity ?? item.qty);
-      const shirt = Number(item.shirt === undefined ? (catalog.get(String(item.id)) || archivedProduct(item)).shirt : item.shirt);
+      const shirt = Number(
+        item.shirt === undefined ? (catalog.get(String(item.id)) || archivedProduct(item)).shirt : item.shirt,
+      );
       if (!Number.isInteger(quantity) || quantity < 1 || !Number.isSafeInteger(shirt) || shirt < 1) continue;
-      const key = JSON.stringify([item.id,item.size,shirt]);
-      const current=catalog.get(String(item.id));
-      const source=current&&isShirtAvailable(current,shirt)&&getShirtSizes(current,shirt).includes(item.size)?current:archivedProduct(item);
-      unique.set(key, { id: String(item.id), size: item.size, shirt, quantity: Math.min(10, quantity + (unique.get(key)?.quantity || 0)), snapshot: snapshotFor(source) });
+      const key = JSON.stringify([item.id, item.size, shirt]);
+      const current = catalog.get(String(item.id));
+      const source =
+        current && isShirtAvailable(current, shirt) && getShirtSizes(current, shirt).includes(item.size)
+          ? current
+          : archivedProduct(item);
+      unique.set(key, {
+        id: String(item.id),
+        size: item.size,
+        shirt,
+        quantity: Math.min(10, quantity + (unique.get(key)?.quantity || 0)),
+        snapshot: snapshotFor(source),
+      });
     }
     return [...unique.values()];
   };
-  const readCart = () => { try { return validateCart(JSON.parse(localStorage.getItem(CART_KEY) || '[]')); } catch { return []; } };
+  const readCart = () => {
+    try {
+      return validateCart(JSON.parse(localStorage.getItem(CART_KEY) || "[]"));
+    } catch {
+      return [];
+    }
+  };
   let items = readCart();
   const getCount = () => items.reduce((count, item) => count + item.quantity, 0);
-  const productFor = item => {
-    const snapshot = archivedProduct(item), product = catalog.get(item.id) || snapshot;
-    const option = getShirtOption(product,item.shirt) || getShirtOption(snapshot,item.shirt);
-    const colorName = option && !option.legacy ? [option.baseName,option.type,option.weightGsm?`${option.weightGsm} g/m²`:'',option.colorName].filter(Boolean).join(' · ') : colorLabel(item.shirt);
-    return {...product,shirt:item.shirt,shirtOptions:option?[option]:product.shirtOptions,colorName};
+  const productFor = (item) => {
+    const snapshot = archivedProduct(item),
+      product = catalog.get(item.id) || snapshot;
+    const option = getShirtOption(product, item.shirt) || getShirtOption(snapshot, item.shirt);
+    const colorName =
+      option && !option.legacy
+        ? (product.kind === "article" ? [option.colorName] : [option.baseName, option.weightGsm ? `${option.weightGsm} g/m²` : "", option.colorName])
+            .filter(Boolean)
+            .join(" · ")
+        : colorLabel(item.shirt);
+    const price = Number.isFinite(Number(option?.price)) && Number(option?.price) > 0 ? Number(option.price) : product.price;
+    return { ...product, price, shirt: item.shirt, shirtOptions: option ? [option] : product.shirtOptions, colorName };
   };
   const totals = () => {
     const subtotal = round(items.reduce((total, item) => total + Number(productFor(item).price) * item.quantity, 0));
-    const discount = discountApplied ? round(subtotal * .1) : 0;
+    const discount = discountApplied ? round(subtotal * 0.1) : 0;
     const shipping = subtotal === 0 || subtotal >= 120 ? 0 : 8;
     return { subtotal, discount, shipping, total: round(subtotal - discount + shipping) };
   };
-  const checkoutFingerprint = () => JSON.stringify({ customer: formValues, items: items.map(item => ({ productId: item.id, shirt: item.shirt, size: item.size, quantity: item.quantity })), discountCode: discountApplied ? 'ZENIN10' : null });
-  const canReplayOrder = () => !!(pendingSubmission?.attempted && pendingSubmission.fingerprint === checkoutFingerprint());
-  const itemIsAvailable = item => activeIds.has(item.id) && isShirtAvailable(catalog.get(item.id), item.shirt) && getShirtSizes(catalog.get(item.id),item.shirt).includes(item.size);
-  const hasUnavailableItems = () => items.some(item => !itemIsAvailable(item));
+  const checkoutFingerprint = () =>
+    JSON.stringify({
+      customer: formValues,
+      items: items.map((item) => ({ productId: item.id, shirt: item.shirt, size: item.size, quantity: item.quantity })),
+      discountCode: discountApplied ? "ZENIN10" : null,
+    });
+  const canReplayOrder = () =>
+    !!(pendingSubmission?.attempted && pendingSubmission.fingerprint === checkoutFingerprint());
+  const itemIsAvailable = (item) =>
+    activeIds.has(item.id) &&
+    isShirtAvailable(catalog.get(item.id), item.shirt) &&
+    getShirtSizes(catalog.get(item.id), item.shirt).includes(item.size);
+  const hasUnavailableItems = () => items.some((item) => !itemIsAvailable(item));
   const unavailableItemsBlock = () => hasUnavailableItems() && !canReplayOrder();
-  const stockNote = item => { if(!activeIds.has(item.id))return l('Producto retirado. Elimínalo de tu bolsa para continuar.', 'Product removed. Remove it from your bag to continue.'); if(!isShirtAvailable(catalog.get(item.id),item.shirt))return l('Color retirado. Elimina esta camiseta y elige otro color para continuar.', 'Color removed. Remove this tee and choose another color to continue.'); if(!getShirtSizes(catalog.get(item.id),item.shirt).includes(item.size))return l('Talla retirada. Elimina esta camiseta y elige otra talla para continuar.', 'Size removed. Remove this tee and choose another size to continue.'); const stock = getStock(item.id, item.shirt, item.size); return stock === null ? inventoryMessage() : stock === 0 ? 'Low stock' : l('{stock} disponibles', '{stock} available', { stock }); };
-  const inventoryNotice = () => { const state = getInventoryState(); return state.status === 'ready' ? '' : `<div class="cart-inventory" role="status"><p>${esc(inventoryMessage())}</p><button type="button" class="cart-inventory-retry" data-inventory-retry ${state.status === 'loading' ? 'disabled' : ''}>${state.status === 'loading' ? l('Consultando…', 'Checking…') : l('Reintentar', 'Retry')}</button></div>`; };
-  const reloadInventory = () => refreshInventory().catch(() => { announce(inventoryErrorMessage()); });
-  const notify = () => subscribers.forEach(callback => callback(getCount()));
-  const save = () => { try { localStorage.setItem(CART_KEY, JSON.stringify(items)); } catch {} notify(); };
-  const closeDialog = dialog => { if (dialog.open) dialog.close(); };
-  const heading = (title, target) => `<div class="cart-heading"><div><span class="eyebrow">ZENIN CLUB</span><h2 id="${target === 'cart' ? 'cart-title' : 'checkout-title'}">${title}</h2></div><button type="button" class="close-button" data-commerce-close="${target}" aria-label="${l('Cerrar', 'Close')}"><span aria-hidden="true">×</span></button></div>`;
-  const priceRows = (values = totals(), code = discountApplied ? 'ZENIN10' : null) => `<div class="cart-totals"><div class="cart-total-row"><span>${l('Subtotal', 'Subtotal')}</span><span>${formatMoney(values.subtotal)}</span></div>${code ? `<div class="cart-total-row cart-discount"><span>ZENIN10 · ${l('10% de descuento', '10% off')}</span><span>−${formatMoney(values.discount)}</span></div>` : ''}<div class="cart-total-row"><span>${l('Envío', 'Shipping')}</span><span>${values.shipping === 0 ? l('GRATIS', 'FREE') : formatMoney(values.shipping)}</span></div><div class="cart-total-row cart-grand-total"><span>${l('Total', 'Total')}</span><span>${formatMoney(values.total)} <small>USD</small></span></div></div>`;
-  const promoMessage = () => promoState === 'success' ? l('Ya estás dentro. 10% de descuento en tus camisetas.', 'You’re in. 10% off your tees.') : promoState === 'applied' ? l('ZENIN10 ya está aplicado a tu bolsa.', 'ZENIN10 is already applied to your bag.') : promoState === 'invalid' ? l('Ese código no funciona. Prueba ZENIN10.', 'That code didn’t land. Try ZENIN10.') : '';
+  const stockNote = (item) => {
+    if (!activeIds.has(item.id))
+      return l(
+        "Producto retirado. Elimínalo de tu bolsa para continuar.",
+        "Product removed. Remove it from your bag to continue.",
+      );
+    if (!isShirtAvailable(catalog.get(item.id), item.shirt))
+      return l(
+        "Color retirado. Elimina esta camiseta y elige otro color para continuar.",
+        "Color removed. Remove this tee and choose another color to continue.",
+      );
+    if (!getShirtSizes(catalog.get(item.id), item.shirt).includes(item.size))
+      return l(
+        "Talla retirada. Elimina esta camiseta y elige otra talla para continuar.",
+        "Size removed. Remove this tee and choose another size to continue.",
+      );
+    const stock = getStock(item.id, item.shirt, item.size);
+    return stock === null
+      ? inventoryMessage()
+      : stock === 0
+        ? "Low stock"
+        : l("{stock} disponibles", "{stock} available", { stock });
+  };
+  const inventoryNotice = () => {
+    const state = getInventoryState();
+    return state.status === "ready"
+      ? ""
+      : `<div class="cart-inventory" role="status"><p>${esc(inventoryMessage())}</p><button type="button" class="cart-inventory-retry" data-inventory-retry ${state.status === "loading" ? "disabled" : ""}>${state.status === "loading" ? l("Consultando…", "Checking…") : l("Reintentar", "Retry")}</button></div>`;
+  };
+  const reloadInventory = () =>
+    refreshInventory().catch(() => {
+      announce(inventoryErrorMessage());
+    });
+  const notify = () => subscribers.forEach((callback) => callback(getCount()));
+  const save = () => {
+    try {
+      localStorage.setItem(CART_KEY, JSON.stringify(items));
+    } catch {}
+    notify();
+  };
+  const closeDialog = (dialog) => {
+    if (dialog.open) dialog.close();
+  };
+  const heading = (title, target) =>
+    `<div class="cart-heading"><div><span class="eyebrow">ZENIN CLUB</span><h2 id="${target === "cart" ? "cart-title" : "checkout-title"}">${title}</h2></div><button type="button" class="close-button" data-commerce-close="${target}" aria-label="${l("Cerrar", "Close")}"><span aria-hidden="true">×</span></button></div>`;
+  const priceRows = (values = totals(), code = discountApplied ? "ZENIN10" : null) =>
+    `<div class="cart-totals"><div class="cart-total-row"><span>${l("Subtotal", "Subtotal")}</span><span>${formatMoney(values.subtotal)}</span></div>${code ? `<div class="cart-total-row cart-discount"><span>ZENIN10 · ${l("10% de descuento", "10% off")}</span><span>−${formatMoney(values.discount)}</span></div>` : ""}<div class="cart-total-row"><span>${l("Envío", "Shipping")}</span><span>${values.shipping === 0 ? l("GRATIS", "FREE") : formatMoney(values.shipping)}</span></div><div class="cart-total-row cart-grand-total"><span>${l("Total", "Total")}</span><span>${formatMoney(values.total)} <small>USD</small></span></div></div>`;
+  const promoMessage = () =>
+    promoState === "success"
+      ? l("Ya estás dentro. 10% de descuento en tus camisetas.", "You’re in. 10% off your tees.")
+      : promoState === "applied"
+        ? l("ZENIN10 ya está aplicado a tu bolsa.", "ZENIN10 is already applied to your bag.")
+        : promoState === "invalid"
+          ? l("Ese código no funciona. Prueba ZENIN10.", "That code didn’t land. Try ZENIN10.")
+          : "";
   const renderCart = () => {
     if (!items.length) {
-      cartContent.innerHTML = `${heading(`${l('TU BOLSA', 'YOUR BAG')} <span class="cart-count">(0)</span>`, 'cart')}<div class="cart-empty"><span class="cart-empty-symbol" aria-hidden="true">↗</span><h3>${l('Las cosas buenas vienen en camisetas.', 'Good things come in tees.')}</h3><p>${l('Tu bolsa está esperando su primera elección.', 'Your bag is waiting for its first pick.')}</p><a href="#shop" class="btn btn-primary" data-commerce-close="cart">${l('Explorar la colección', 'Explore the collection')} <span aria-hidden="true">↗</span></a></div><p class="cart-footnote">${l('Gráficos independientes. Esenciales de cada día.', 'Independent graphics. Everyday essentials.')}</p>`;
+      cartContent.innerHTML = `${heading(`${l("TU BOLSA", "YOUR BAG")} <span class="cart-count">(0)</span>`, "cart")}<div class="cart-empty"><span class="cart-empty-symbol" aria-hidden="true">↗</span><h3>${l("Las cosas buenas vienen en camisetas.", "Good things come in tees.")}</h3><p>${l("Tu bolsa está esperando su primera elección.", "Your bag is waiting for its first pick.")}</p><a href="#shop" class="btn btn-primary" data-commerce-close="cart">${l("Explorar la colección", "Explore the collection")} <span aria-hidden="true">↗</span></a></div><p class="cart-footnote">${l("Gráficos independientes. Esenciales de cada día.", "Independent graphics. Everyday essentials.")}</p>`;
       return;
     }
     const { subtotal } = totals();
-    cartContent.innerHTML = `${heading(`${l('TU BOLSA', 'YOUR BAG')} <span class="cart-count">(${getCount()})</span>`, 'cart')}<div class="cart-shipping-note">${subtotal >= 120 ? l('Nosotros pagamos tu envío.', 'Your shipping is on us.') : l('Te faltan {amount} para tener envío gratis.', 'You’re {amount} away from free shipping.', { amount: formatMoney(round(120 - subtotal)) })}</div><div class="cart-items">${items.map((item, index) => {
-      const product = productFor(item);
-      return `<article class="cart-item"><div class="cart-item-image">${shirtHTML(product, 'cart-shirt')}</div><div class="cart-item-info"><div class="cart-item-top"><div><p class="cart-item-collection">${esc(collectionName(product.collection || 'ZENIN ORIGINALS'))}</p><h3>${esc(productName(product) || product.title)}</h3><p class="cart-item-size">${esc(product.colorName)} / ${l('Talla', 'Size')} ${esc(item.size)}</p><p class="cart-stock-note" ${!itemIsAvailable(item) ? 'data-product-unavailable' : getStock(item.id, item.shirt, item.size) === 0 ? 'data-low-stock' : ''}>${esc(stockNote(item))}</p></div><button type="button" class="cart-remove" data-cart-remove="${index}" aria-label="${esc(l('Eliminar {name}, talla {size}', 'Remove {name}, size {size}', { name: productName(product), size: item.size }))}">${l('Eliminar', 'Remove')}</button></div><div class="cart-item-bottom"><div class="cart-quantity" aria-label="${l('Cantidad', 'Quantity')}"><button type="button" data-cart-quantity="${index}" data-cart-delta="-1" aria-label="${l('Reducir cantidad', 'Decrease quantity')}">−</button><span aria-live="polite">${item.quantity}</span><button type="button" data-cart-quantity="${index}" data-cart-delta="1" aria-label="${l('Aumentar cantidad', 'Increase quantity')}" ${item.quantity >= 10 || getCount() >= 50 || !itemIsAvailable(item) ? 'disabled' : ''}>+</button></div><strong>${formatMoney(product.price * item.quantity)}</strong></div></div></article>`;
-    }).join('')}</div><div class="cart-summary">${inventoryNotice()}${getCount() > 50 ? `<p class="cart-inventory" role="alert">${esc(apiErrorMessage({ code: 'INVALID_QUANTITY' }))}</p>` : ''}<form class="cart-promo" id="cart-promo-form"><label class="cart-promo-label" for="cart-promo-code">${l('¿Tienes un código?', 'Have a code?')}</label><div class="cart-promo-controls"><input id="cart-promo-code" name="code" value="${esc(promoCode)}" type="text" placeholder="${l('Prueba ZENIN10', 'Try ZENIN10')}" autocomplete="off" aria-describedby="cart-promo-message"><button class="cart-promo-button" type="submit">${l('Aplicar', 'Apply')}</button></div><p id="cart-promo-message" class="cart-promo-message ${discountApplied ? 'cart-promo-success' : ''}" role="status">${promoMessage()}</p></form>${priceRows()}<button type="button" class="btn btn-primary cart-checkout-button" data-checkout-start ${getCount() > 50 || unavailableItemsBlock() ? 'disabled' : ''}>${l('Finalizar pedido', 'Checkout')} <span aria-hidden="true">↗</span></button><p class="cart-footnote">${l('Pago de prueba · No se realizará ningún cobro', 'Demo payment · No payment will be taken')}</p></div>`;
+    cartContent.innerHTML = `${heading(`${l("TU BOLSA", "YOUR BAG")} <span class="cart-count">(${getCount()})</span>`, "cart")}<div class="cart-shipping-note">${subtotal >= 120 ? l("Nosotros pagamos tu envío.", "Your shipping is on us.") : l("Te faltan {amount} para tener envío gratis.", "You’re {amount} away from free shipping.", { amount: formatMoney(round(120 - subtotal)) })}</div><div class="cart-items">${items
+      .map((item, index) => {
+        const product = productFor(item);
+        return `<article class="cart-item"><div class="cart-item-image">${shirtHTML(product, "cart-shirt")}</div><div class="cart-item-info"><div class="cart-item-top"><div><p class="cart-item-collection">${esc(l(product.collectionEs || product.collection || "", product.collection || product.collectionEs || "") || (product.kind === "article" ? product.articleType || "" : "Zenin Club"))}</p><h3>${esc(productName(product) || product.title)}</h3><p class="cart-item-size">${esc(product.colorName)} / ${product.kind === "article" ? "" : `${l("Talla", "Size")} `}${esc(item.size)}</p><p class="cart-stock-note" ${!itemIsAvailable(item) ? "data-product-unavailable" : getStock(item.id, item.shirt, item.size) === 0 ? "data-low-stock" : ""}>${esc(stockNote(item))}</p></div><button type="button" class="cart-remove" data-cart-remove="${index}" aria-label="${esc(l("Eliminar {name}, talla {size}", "Remove {name}, size {size}", { name: productName(product), size: item.size }))}">${l("Eliminar", "Remove")}</button></div><div class="cart-item-bottom"><div class="cart-quantity" aria-label="${l("Cantidad", "Quantity")}"><button type="button" data-cart-quantity="${index}" data-cart-delta="-1" aria-label="${l("Reducir cantidad", "Decrease quantity")}">−</button><span aria-live="polite">${item.quantity}</span><button type="button" data-cart-quantity="${index}" data-cart-delta="1" aria-label="${l("Aumentar cantidad", "Increase quantity")}" ${item.quantity >= 10 || getCount() >= 50 || !itemIsAvailable(item) ? "disabled" : ""}>+</button></div><strong>${formatMoney(product.price * item.quantity)}</strong></div></div></article>`;
+      })
+      .join(
+        "",
+      )}</div><div class="cart-summary">${inventoryNotice()}${getCount() > 50 ? `<p class="cart-inventory" role="alert">${esc(apiErrorMessage({ code: "INVALID_QUANTITY" }))}</p>` : ""}<form class="cart-promo" id="cart-promo-form"><label class="cart-promo-label" for="cart-promo-code">${l("¿Tienes un código?", "Have a code?")}</label><div class="cart-promo-controls"><input id="cart-promo-code" name="code" value="${esc(promoCode)}" type="text" placeholder="${l("Prueba ZENIN10", "Try ZENIN10")}" autocomplete="off" aria-describedby="cart-promo-message"><button class="cart-promo-button" type="submit">${l("Aplicar", "Apply")}</button></div><p id="cart-promo-message" class="cart-promo-message ${discountApplied ? "cart-promo-success" : ""}" role="status">${promoMessage()}</p></form>${priceRows()}<button type="button" class="btn btn-primary cart-checkout-button" data-checkout-start ${getCount() > 50 || unavailableItemsBlock() ? "disabled" : ""}>${l("Finalizar pedido", "Checkout")} <span aria-hidden="true">↗</span></button><p class="cart-footnote">${l("Pago de prueba · No se realizará ningún cobro", "Demo payment · No payment will be taken")}</p></div>`;
   };
   const openCart = () => {
-    if (submitting) { if (!checkoutDialog.open) checkoutDialog.showModal(); return; }
-    closeDialog(checkoutDialog); renderCart(); if (!cartDialog.open) cartDialog.showModal(); ensureInventory().catch(() => {});
+    if (submitting) {
+      if (!checkoutDialog.open) checkoutDialog.showModal();
+      return;
+    }
+    closeDialog(checkoutDialog);
+    renderCart();
+    if (!cartDialog.open) cartDialog.showModal();
+    ensureInventory().catch(() => {});
   };
-  const input = (name, label, autocomplete, options = {}) => `<div class="checkout-field ${options.full ? 'checkout-field-full' : ''}"><label for="checkout-${name}">${label}${options.optional ? ` <span>(${l('opcional', 'optional')})</span>` : ''}</label><input id="checkout-${name}" name="${name}" type="${options.type || 'text'}" value="${esc(formValues[name])}" autocomplete="${autocomplete}" ${options.optional ? '' : 'required'} maxlength="${({ name: 120, email: 254, address: 200, apartment: 120, city: 100, postal: 20 })[name] || 200}" ${submitting ? 'disabled' : ''}></div>`;
+  const input = (name, label, autocomplete, options = {}) =>
+    `<div class="checkout-field ${options.full ? "checkout-field-full" : ""}"><label for="checkout-${name}">${label}${options.optional ? ` <span>(${l("opcional", "optional")})</span>` : ""}</label><input id="checkout-${name}" name="${name}" type="${options.type || "text"}" value="${esc(formValues[name])}" autocomplete="${autocomplete}" ${options.optional ? "" : "required"} maxlength="${{ name: 120, email: 254, phone: 30, address: 200, apartment: 120, city: 100, state: 60, postal: 20 }[name] || 200}" ${submitting ? "disabled" : ""}></div>`;
   const renderCheckout = () => {
-    checkoutContent.innerHTML = `${heading(l('HAZLO TUYO', 'MAKE IT YOURS'), 'checkout')}<p class="checkout-demo">${l('Pago de prueba · No se realizará ningún cobro', 'Demo checkout · No payment will be taken')}</p><div class="checkout-layout"><form id="checkout-form" class="checkout-form" novalidate aria-busy="${submitting}"><h3>${l('Contacto', 'Contact')}</h3><div class="checkout-fields">${input('name', l('Nombre completo', 'Full name'), 'name', { full: true })}${input('email', l('Correo electrónico', 'Email address'), 'email', { full: true, type: 'email' })}</div><h3>${l('Dirección de envío', 'Shipping address')}</h3><div class="checkout-fields">${input('address', l('Dirección', 'Street address'), 'address-line1', { full: true })}${input('apartment', l('Apartamento, local, etc.', 'Apartment, suite, etc.'), 'address-line2', { full: true, optional: true })}${input('city', l('Ciudad', 'City'), 'address-level2')}${input('postal', l('Código postal', 'Postal code'), 'postal-code', { optional: true })}<div class="checkout-field checkout-field-full"><label for="checkout-country">${l('País', 'Country')}</label><select id="checkout-country" name="country" autocomplete="country" required ${submitting ? 'disabled' : ''}>${COUNTRIES.map(([code, es, en]) => `<option value="${code}" ${formValues.country === code ? 'selected' : ''}>${l(es, en)}</option>`).join('')}</select></div></div><p class="checkout-privacy">${l('Guardaremos tu pedido y tus datos de envío para que puedas consultarlo desde cualquier dispositivo. El pago es simulado; no pedimos datos de tarjeta.', 'We’ll save your order and shipping details so you can track it from any device. Payment is simulated; no card details are required.')}</p>${inventoryNotice()}<div class="checkout-error" id="checkout-error" role="alert" ${errorMessage ? '' : 'hidden'}>${esc(errorMessage)}</div><button class="btn btn-primary checkout-place-order" type="submit" ${submitting || unavailableItemsBlock() ? 'disabled' : ''}>${submitting ? l('Guardando pedido…', 'Saving order…') : errorMessage ? l('Reintentar pedido', 'Retry order') : l('Confirmar pedido', 'Place order')} <span aria-hidden="true">↗</span></button><button class="checkout-back" type="button" data-checkout-back ${submitting ? 'disabled' : ''}>← ${l('Volver a la bolsa', 'Back to bag')}</button></form><aside class="checkout-order"><h3>${l('LO BUENO', 'THE GOOD STUFF')} <span>(${getCount()})</span></h3><div class="checkout-order-items">${items.map(item => { const product = productFor(item); return `<div class="checkout-order-item"><div class="checkout-order-image">${shirtHTML(product, 'checkout-shirt')}<span class="checkout-item-count">${item.quantity}</span></div><div class="checkout-order-description"><strong>${esc(productName(product) || product.title)}</strong><span>${esc(product.colorName)} / ${l('Talla', 'Size')} ${esc(item.size)}</span><span class="cart-stock-note">${esc(stockNote(item))}</span></div><span>${formatMoney(product.price * item.quantity)}</span></div>`; }).join('')}</div>${priceRows()}<p class="checkout-order-note">${l('El servidor confirma los importes al guardar tu pedido.', 'Final amounts are confirmed by the server when your order is saved.')}</p></aside></div>`;
+    checkoutContent.innerHTML = `${heading(l("HAZLO TUYO", "MAKE IT YOURS"), "checkout")}${payments.enabled ? `<p class="checkout-demo checkout-secure">${l("Pago seguro con Tilopay · Tarjeta o SINPE Móvil", "Secure payment with Tilopay · Card or SINPE Móvil")}</p>` : `<p class="checkout-demo">${l("Pago de prueba · No se realizará ningún cobro", "Demo checkout · No payment will be taken")}</p>`}<div class="checkout-layout"><form id="checkout-form" class="checkout-form" novalidate aria-busy="${submitting}"><h3>${l("Contacto", "Contact")}</h3><div class="checkout-fields">${input("name", l("Nombre completo", "Full name"), "name", { full: true })}${input("email", l("Correo electrónico", "Email address"), "email", { full: true, type: "email" })}${input("phone", l("Teléfono", "Phone"), "tel", { full: true, type: "tel", optional: !payments.enabled })}</div><h3>${l("Dirección de envío", "Shipping address")}</h3><div class="checkout-fields">${input("address", l("Dirección", "Street address"), "address-line1", { full: true })}${input("apartment", l("Apartamento, local, etc.", "Apartment, suite, etc."), "address-line2", { full: true, optional: true })}${input("city", l("Ciudad", "City"), "address-level2")}${formValues.country === "CR" ? `<div class="checkout-field"><label for="checkout-state">${l("Provincia", "Province")}</label><select id="checkout-state" name="state" autocomplete="address-level1" required ${submitting ? "disabled" : ""}><option value="">${l("Elige…", "Choose…")}</option>${PROVINCES.map(([code, name]) => `<option value="${code}" ${formValues.state === code ? "selected" : ""}>${name}</option>`).join("")}</select></div>` : input("state", l("Estado / provincia", "State / province"), "address-level1", { optional: true })}${input("postal", l("Código postal", "Postal code"), "postal-code", { optional: true })}<div class="checkout-field checkout-field-full"><label for="checkout-country">${l("País", "Country")}</label><select id="checkout-country" name="country" autocomplete="country" required ${submitting ? "disabled" : ""}>${COUNTRIES.map(([code, es, en]) => `<option value="${code}" ${formValues.country === code ? "selected" : ""}>${l(es, en)}</option>`).join("")}</select></div></div><p class="checkout-privacy">${payments.enabled ? l("Al continuar te llevamos a la página segura de Tilopay para pagar con tarjeta o SINPE Móvil. Nunca vemos ni guardamos los datos de tu tarjeta.", "Next, you'll pay on Tilopay's secure page with a card or SINPE Móvil. We never see or store your card details.") : l("Guardaremos tu pedido y tus datos de envío para que puedas consultarlo desde cualquier dispositivo. El pago es simulado; no pedimos datos de tarjeta.", "We’ll save your order and shipping details so you can track it from any device. Payment is simulated; no card details are required.")}</p>${inventoryNotice()}<div class="checkout-error" id="checkout-error" role="alert" ${errorMessage ? "" : "hidden"}>${esc(errorMessage)}</div><button class="btn btn-primary checkout-place-order" type="submit" ${submitting || unavailableItemsBlock() ? "disabled" : ""}>${redirecting ? l("Abriendo pago seguro…", "Opening secure payment…") : submitting ? l("Guardando pedido…", "Saving order…") : errorMessage ? l("Reintentar pedido", "Retry order") : payments.enabled ? l("Continuar al pago", "Continue to payment") : l("Confirmar pedido", "Place order")} <span aria-hidden="true">↗</span></button><button class="checkout-back" type="button" data-checkout-back ${submitting ? "disabled" : ""}>← ${l("Volver a la bolsa", "Back to bag")}</button></form><aside class="checkout-order"><h3>${l("LO BUENO", "THE GOOD STUFF")} <span>(${getCount()})</span></h3><div class="checkout-order-items">${items
+      .map((item) => {
+        const product = productFor(item);
+        return `<div class="checkout-order-item"><div class="checkout-order-image">${shirtHTML(product, "checkout-shirt")}<span class="checkout-item-count">${item.quantity}</span></div><div class="checkout-order-description"><strong>${esc(productName(product) || product.title)}</strong><span>${esc(product.colorName)} / ${product.kind === "article" ? "" : `${l("Talla", "Size")} `}${esc(item.size)}</span><span class="cart-stock-note">${esc(stockNote(item))}</span></div><span>${formatMoney(product.price * item.quantity)}</span></div>`;
+      })
+      .join(
+        "",
+      )}</div>${priceRows()}<p class="checkout-order-note">${l("El servidor confirma los importes al guardar tu pedido.", "Final amounts are confirmed by the server when your order is saved.")}</p></aside></div>`;
   };
-  const startCheckout = () => { if (!items.length || submitting) return; if (unavailableItemsBlock()) { announce(apiErrorMessage({code:'INVALID_PRODUCT'}));return; } if (getCount() > 50) { announce(apiErrorMessage({ code: 'INVALID_QUANTITY' })); return; } confirmedOrder = null; errorMessage = ''; orderError = null; closeDialog(cartDialog); renderCheckout(); if (!checkoutDialog.open) checkoutDialog.showModal(); };
-  const readForm = form => { if (!form || submitting) return; const data = new FormData(form); for (const name of Object.keys(formValues)) formValues[name] = String(data.get(name) || '').trim(); };
-  const trackingHash = () => `#order/${encodeURIComponent(confirmedOrder.order.id)}/${encodeURIComponent(confirmedOrder.token)}`;
+  const startCheckout = () => {
+    if (!items.length || submitting) return;
+    if (unavailableItemsBlock()) {
+      announce(apiErrorMessage({ code: "INVALID_PRODUCT" }));
+      return;
+    }
+    if (getCount() > 50) {
+      announce(apiErrorMessage({ code: "INVALID_QUANTITY" }));
+      return;
+    }
+    confirmedOrder = null;
+    errorMessage = "";
+    orderError = null;
+    closeDialog(cartDialog);
+    renderCheckout();
+    if (!checkoutDialog.open) checkoutDialog.showModal();
+  };
+  const readForm = (form) => {
+    if (!form || submitting) return;
+    const data = new FormData(form);
+    for (const name of Object.keys(formValues)) formValues[name] = String(data.get(name) || "").trim();
+  };
+  const trackingHash = () =>
+    `#order/${encodeURIComponent(confirmedOrder.order.id)}/${encodeURIComponent(confirmedOrder.token)}`;
   const renderConfirmation = () => {
     const { order } = confirmedOrder;
-    checkoutContent.innerHTML = `${heading(l('YA ERES PARTE DEL CLUB.', 'YOU’RE IN THE CLUB.'), 'checkout')}<div class="checkout-confirmation"><div class="checkout-confirmation-mark" aria-hidden="true">✓</div><span class="eyebrow">${l('PEDIDO', 'ORDER')} ${esc(order.id)}</span><h3>${l('Buen gusto.<br>Gran elección.', 'Good taste.<br>Great choice.')}</h3><p>${esc(l('Gracias, {name}. Tu pedido quedó guardado.', 'Thanks, {name}. Your order has been saved.', { name: order.customer.name.split(/\s+/)[0] }))}</p><div class="checkout-confirmation-details"><span>${statusLabel(order.status)}</span><strong>${formatMoney(order.totals.total)} USD</strong></div><p>${l('Referencia', 'Reference')}: <strong>${esc(order.id)}</strong><br>${esc(order.customer.email)}<br>${formatDate(order.createdAt)}</p><p class="checkout-demo">${l('Pago de prueba · No se realizó ningún cobro', 'Demo payment · No payment was taken')}</p><p class="checkout-confirmation-note">${l('Guarda tu referencia y el enlace de seguimiento. También puedes consultar tu pedido con la referencia y tu correo electrónico.', 'Save your reference and tracking link. You can also look up your order with the reference and your email address.')}</p><div class="checkout-confirmation-actions"><a href="${trackingHash()}" class="btn btn-primary" data-commerce-close="checkout">${l('Seguir mi pedido', 'Track my order')} ↗</a><button type="button" class="btn btn-outline" data-receipt-download>${l('Descargar recibo', 'Download receipt')}</button><button type="button" class="checkout-back" data-receipt-print>${l('Imprimir recibo', 'Print receipt')}</button><a href="#shop" class="checkout-back" data-commerce-close="checkout">${l('Seguir comprando', 'Keep shopping')} ↗</a></div></div>`;
+    checkoutContent.innerHTML = `${heading(l("YA ERES PARTE DEL CLUB.", "YOU’RE IN THE CLUB."), "checkout")}<div class="checkout-confirmation"><div class="checkout-confirmation-mark" aria-hidden="true">✓</div><span class="eyebrow">${l("PEDIDO", "ORDER")} ${esc(order.id)}</span><h3>${l("Buen gusto.<br>Gran elección.", "Good taste.<br>Great choice.")}</h3><p>${esc(l("Gracias, {name}. Tu pedido quedó guardado.", "Thanks, {name}. Your order has been saved.", { name: order.customer.name.split(/\s+/)[0] }))}</p><div class="checkout-confirmation-details"><span>${statusLabel(order.status)}</span><strong>${formatMoney(order.totals.total)} USD</strong></div><p>${l("Referencia", "Reference")}: <strong>${esc(order.id)}</strong><br>${esc(order.customer.email)}<br>${formatDate(order.createdAt)}</p><p class="checkout-demo">${l("Pago de prueba · No se realizó ningún cobro", "Demo payment · No payment was taken")}</p><p class="checkout-confirmation-note">${l("Guarda tu referencia y el enlace de seguimiento. También puedes consultar tu pedido con la referencia y tu correo electrónico.", "Save your reference and tracking link. You can also look up your order with the reference and your email address.")}</p><div class="checkout-confirmation-actions"><a href="${trackingHash()}" class="btn btn-primary" data-commerce-close="checkout">${l("Seguir mi pedido", "Track my order")} ↗</a><button type="button" class="btn btn-outline" data-receipt-download>${l("Descargar recibo", "Download receipt")}</button><button type="button" class="checkout-back" data-receipt-print>${l("Imprimir recibo", "Print receipt")}</button><a href="#shop" class="checkout-back" data-commerce-close="checkout">${l("Seguir comprando", "Keep shopping")} ↗</a></div></div>`;
   };
   const receiptText = () => {
     const { order } = confirmedOrder;
-    return [`ZENIN CLUB — ${l('RECIBO', 'RECEIPT')}`, `${l('Pedido', 'Order')}: ${order.id}`, formatDate(order.createdAt), `${l('Estado', 'Status')}: ${statusLabel(order.status)}`, '', order.customer.name, order.customer.email, [order.customer.address, order.customer.apartment, order.customer.city, order.customer.postal, order.customer.country].filter(Boolean).join(', '), '', ...order.items.map(item => `${item.quantity} × ${productName(item)} / ${item.colorName||colorLabel(item.shirt)} / ${l('Talla', 'Size')} ${item.size} — ${formatMoney(item.unitPrice * item.quantity)}`), '', `${l('Subtotal', 'Subtotal')}: ${formatMoney(order.totals.subtotal)}`, `${l('Descuento', 'Discount')}: ${formatMoney(order.totals.discount)}`, `${l('Envío', 'Shipping')}: ${formatMoney(order.totals.shipping)}`, `${l('Total', 'Total')}: ${formatMoney(order.totals.total)} USD`, '', l('Pago simulado. No se realizó ningún cobro.', 'Simulated payment. No payment was taken.'), `${l('Seguimiento', 'Tracking')}: ${window.location.href.split('#')[0]}${trackingHash()}`].join('\n');
+    return [
+      `ZENIN CLUB — ${l("RECIBO", "RECEIPT")}`,
+      `${l("Pedido", "Order")}: ${order.id}`,
+      formatDate(order.createdAt),
+      `${l("Estado", "Status")}: ${statusLabel(order.status)}`,
+      "",
+      order.customer.name,
+      order.customer.email,
+      [
+        order.customer.address,
+        order.customer.apartment,
+        order.customer.city,
+        order.customer.postal,
+        order.customer.country,
+      ]
+        .filter(Boolean)
+        .join(", "),
+      "",
+      ...order.items.map(
+        (item) =>
+          `${item.quantity} × ${productName(item)} / ${item.colorName || colorLabel(item.shirt)} / ${item.kind === "article" ? "" : `${l("Talla", "Size")} `}${item.size} — ${formatMoney(item.unitPrice * item.quantity)}`,
+      ),
+      "",
+      `${l("Subtotal", "Subtotal")}: ${formatMoney(order.totals.subtotal)}`,
+      `${l("Descuento", "Discount")}: ${formatMoney(order.totals.discount)}`,
+      `${l("Envío", "Shipping")}: ${formatMoney(order.totals.shipping)}`,
+      `${l("Total", "Total")}: ${formatMoney(order.totals.total)} USD`,
+      "",
+      l("Pago simulado. No se realizó ningún cobro.", "Simulated payment. No payment was taken."),
+      `${l("Seguimiento", "Tracking")}: ${window.location.href.split("#")[0]}${trackingHash()}`,
+    ].join("\n");
   };
-  const downloadReceipt = () => { const url = URL.createObjectURL(new Blob([receiptText()], { type: 'text/plain;charset=utf-8' })); const link = document.createElement('a'); link.href = url; link.download = `zenin-${confirmedOrder.order.id.replace(/[^a-z0-9_-]/gi, '-')}.txt`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
-  const printReceipt = () => { const popup = window.open('', '_blank'); if (!popup) { announce(l('Permite ventanas emergentes para imprimir tu recibo.', 'Allow popups to print your receipt.')); return; } popup.opener = null; popup.document.write(`<!doctype html><html lang="${getLanguage()}"><meta charset="utf-8"><title>Zenin Club — ${esc(confirmedOrder.order.id)}</title><style>body{font:15px/1.7 monospace;margin:48px;color:#111}pre{white-space:pre-wrap;overflow-wrap:anywhere}@media print{body{margin:20px}}</style><body><pre>${esc(receiptText())}</pre></body></html>`); popup.document.close(); popup.focus(); setTimeout(() => popup.print(), 150); };
-  const addItem = (productOrId, size = 'M', quantity = 1, shirt = undefined) => {
-    if (submitting) { announce(l('Espera mientras guardamos tu pedido.', 'Please wait while we save your order.')); return false; }
-    const id = String(typeof productOrId === 'object' ? productOrId?.id : productOrId), requested = Number(quantity);
-    if (!activeIds.has(id)) { announce(apiErrorMessage({code:'INVALID_PRODUCT'}));return false; }
-    if (!catalog.has(id) || typeof size !== 'string' || !Number.isInteger(requested) || requested < 1) return false;
+  const downloadReceipt = () => {
+    const url = URL.createObjectURL(new Blob([receiptText()], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `zenin-${confirmedOrder.order.id.replace(/[^a-z0-9_-]/gi, "-")}.txt`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const printReceipt = () => {
+    const popup = window.open("", "_blank");
+    if (!popup) {
+      announce(l("Permite ventanas emergentes para imprimir tu recibo.", "Allow popups to print your receipt."));
+      return;
+    }
+    popup.opener = null;
+    popup.document.write(
+      `<!doctype html><html lang="${getLanguage()}"><meta charset="utf-8"><title>Zenin Club — ${esc(confirmedOrder.order.id)}</title><style>body{font:15px/1.7 monospace;margin:48px;color:#111}pre{white-space:pre-wrap;overflow-wrap:anywhere}@media print{body{margin:20px}}</style><body><pre>${esc(receiptText())}</pre></body></html>`,
+    );
+    popup.document.close();
+    popup.focus();
+    setTimeout(() => popup.print(), 150);
+  };
+  const addItem = (productOrId, size = "M", quantity = 1, shirt = undefined) => {
+    if (submitting) {
+      announce(l("Espera mientras guardamos tu pedido.", "Please wait while we save your order."));
+      return false;
+    }
+    const id = String(typeof productOrId === "object" ? productOrId?.id : productOrId),
+      requested = Number(quantity);
+    if (!activeIds.has(id)) {
+      announce(apiErrorMessage({ code: "INVALID_PRODUCT" }));
+      return false;
+    }
+    if (!catalog.has(id) || typeof size !== "string" || !Number.isInteger(requested) || requested < 1) return false;
     const selectedShirt = Number(shirt === undefined ? getDefaultShirt(catalog.get(id)) : shirt);
     if (!Number.isSafeInteger(selectedShirt) || selectedShirt < 1) return false;
-    if (!isShirtAvailable(catalog.get(id), selectedShirt)) { announce(l('Este color ya no está disponible. Elige otro color.', 'This color is no longer available. Choose another color.')); return false; }
-    if (!getShirtSizes(catalog.get(id),selectedShirt).includes(size)) { announce(l('Esta talla no está disponible para la base elegida.', 'This size is unavailable for the selected base.')); return false; }
-    const existing = items.find(item => item.id === id && item.size === size && item.shirt === selectedShirt);
-    if (requested > 10 || (existing?.quantity || 0) + requested > 10 || getCount() + requested > 50) { announce(apiErrorMessage({ code: 'INVALID_QUANTITY' })); return false; }
-    if (!existing && items.length >= 40) { announce(apiErrorMessage({ code: 'INVALID_ITEMS' })); return false; }
-    if (existing) existing.quantity = Math.min(10, existing.quantity + requested); else items.push({ id, size, shirt: selectedShirt, quantity: Math.min(10, requested), snapshot: snapshotFor(catalog.get(id)) });
-    confirmedOrder = null; save(); openCart(); announce(l('{name} se agregó a tu bolsa', '{name} added to your bag', { name: productName(catalog.get(id)) || catalog.get(id).title })); return true;
+    if (!isShirtAvailable(catalog.get(id), selectedShirt)) {
+      announce(
+        l(
+          "Este color ya no está disponible. Elige otro color.",
+          "This color is no longer available. Choose another color.",
+        ),
+      );
+      return false;
+    }
+    if (!getShirtSizes(catalog.get(id), selectedShirt).includes(size)) {
+      announce(
+        l("Esta talla no está disponible para la base elegida.", "This size is unavailable for the selected base."),
+      );
+      return false;
+    }
+    const existing = items.find((item) => item.id === id && item.size === size && item.shirt === selectedShirt);
+    if (requested > 10 || (existing?.quantity || 0) + requested > 10 || getCount() + requested > 50) {
+      announce(apiErrorMessage({ code: "INVALID_QUANTITY" }));
+      return false;
+    }
+    if (!existing && items.length >= 40) {
+      announce(apiErrorMessage({ code: "INVALID_ITEMS" }));
+      return false;
+    }
+    if (existing) existing.quantity = Math.min(10, existing.quantity + requested);
+    else
+      items.push({
+        id,
+        size,
+        shirt: selectedShirt,
+        quantity: Math.min(10, requested),
+        snapshot: snapshotFor(catalog.get(id)),
+      });
+    confirmedOrder = null;
+    save();
+    openCart();
+    announce(
+      l("{name} se agregó a tu bolsa", "{name} added to your bag", {
+        name: productName(catalog.get(id)) || catalog.get(id).title,
+      }),
+    );
+    return true;
   };
-  const onChange = callback => { if (typeof callback !== 'function') return () => {}; subscribers.add(callback); callback(getCount()); return () => subscribers.delete(callback); };
-  const restoreCartFocus = (index, delta) => { const row = Math.min(index, items.length - 1); (cartContent.querySelector(`[data-cart-quantity="${row}"][data-cart-delta="${delta}"]:not(:disabled)`) || cartContent.querySelector(`[data-cart-quantity="${row}"]:not(:disabled)`) || cartContent.querySelector('.cart-empty .btn') || cartContent.querySelector('.cart-checkout-button'))?.focus(); };
-  cartContent.addEventListener('click', event => {
-    if (event.target.closest('[data-inventory-retry]')) { reloadInventory(); return; }
-    if (event.target.closest('[data-commerce-close]')) { closeDialog(cartDialog); return; }
-    const remove = event.target.closest('[data-cart-remove]'); if (remove) { const index = Number(remove.dataset.cartRemove); items.splice(index, 1); save(); renderCart(); restoreCartFocus(index, -1); return; }
-    const quantity = event.target.closest('[data-cart-quantity]'); if (quantity) { const index = Number(quantity.dataset.cartQuantity), delta = Number(quantity.dataset.cartDelta); if (!items[index]) return; if (delta > 0 && !itemIsAvailable(items[index])) { announce(stockNote(items[index])); return; } if (delta > 0 && (items[index].quantity >= 10 || getCount() >= 50)) { announce(apiErrorMessage({ code: 'INVALID_QUANTITY' })); return; } items[index].quantity = Math.min(10, items[index].quantity + delta); if (items[index].quantity <= 0) items.splice(index, 1); save(); renderCart(); restoreCartFocus(index, delta); return; }
-    if (event.target.closest('[data-checkout-start]')) startCheckout();
+  const onChange = (callback) => {
+    if (typeof callback !== "function") return () => {};
+    subscribers.add(callback);
+    callback(getCount());
+    return () => subscribers.delete(callback);
+  };
+  const restoreCartFocus = (index, delta) => {
+    const row = Math.min(index, items.length - 1);
+    (
+      cartContent.querySelector(`[data-cart-quantity="${row}"][data-cart-delta="${delta}"]:not(:disabled)`) ||
+      cartContent.querySelector(`[data-cart-quantity="${row}"]:not(:disabled)`) ||
+      cartContent.querySelector(".cart-empty .btn") ||
+      cartContent.querySelector(".cart-checkout-button")
+    )?.focus();
+  };
+  cartContent.addEventListener("click", (event) => {
+    if (event.target.closest("[data-inventory-retry]")) {
+      reloadInventory();
+      return;
+    }
+    if (event.target.closest("[data-commerce-close]")) {
+      closeDialog(cartDialog);
+      return;
+    }
+    const remove = event.target.closest("[data-cart-remove]");
+    if (remove) {
+      const index = Number(remove.dataset.cartRemove);
+      items.splice(index, 1);
+      save();
+      renderCart();
+      restoreCartFocus(index, -1);
+      return;
+    }
+    const quantity = event.target.closest("[data-cart-quantity]");
+    if (quantity) {
+      const index = Number(quantity.dataset.cartQuantity),
+        delta = Number(quantity.dataset.cartDelta);
+      if (!items[index]) return;
+      if (delta > 0 && !itemIsAvailable(items[index])) {
+        announce(stockNote(items[index]));
+        return;
+      }
+      if (delta > 0 && (items[index].quantity >= 10 || getCount() >= 50)) {
+        announce(apiErrorMessage({ code: "INVALID_QUANTITY" }));
+        return;
+      }
+      items[index].quantity = Math.min(10, items[index].quantity + delta);
+      if (items[index].quantity <= 0) items.splice(index, 1);
+      save();
+      renderCart();
+      restoreCartFocus(index, delta);
+      return;
+    }
+    if (event.target.closest("[data-checkout-start]")) startCheckout();
   });
-  cartContent.addEventListener('input', event => { if (event.target.id === 'cart-promo-code') promoCode = event.target.value; });
-  cartContent.addEventListener('submit', event => { if (event.target.id !== 'cart-promo-form') return; event.preventDefault(); const focusApply = document.activeElement?.matches('.cart-promo-button'); promoCode = String(new FormData(event.target).get('code') || '').trim().toUpperCase(); if (promoCode === 'ZENIN10') { discountApplied = true; promoState = 'success'; } else promoState = discountApplied ? 'applied' : 'invalid'; renderCart(); cartContent.querySelector(focusApply ? '.cart-promo-button' : '#cart-promo-code')?.focus(); });
-  for (const type of ['input', 'change']) checkoutContent.addEventListener(type, event => { if (event.target.form?.id === 'checkout-form') { event.target.setCustomValidity?.(''); readForm(event.target.form); } });
-  checkoutContent.addEventListener('click', event => { if (event.target.closest('[data-inventory-retry]')) { reloadInventory(); return; } if (event.target.closest('[data-commerce-close]')) { closeDialog(checkoutDialog); return; } if (event.target.closest('[data-checkout-back]')) openCart(); if (event.target.closest('[data-receipt-download]')) downloadReceipt(); if (event.target.closest('[data-receipt-print]')) printReceipt(); });
-  checkoutContent.addEventListener('submit', async event => {
-    if (event.target.id !== 'checkout-form') return; event.preventDefault(); if (submitting || !items.length) return;
-    const form = event.target; readForm(form);
-    if (unavailableItemsBlock()) { orderError = {code:'INVALID_PRODUCT'};errorMessage=apiErrorMessage(orderError);renderCheckout();checkoutContent.querySelector('[data-checkout-back]')?.focus();return; }
-    if (getCount() > 50 || items.length > 40) { orderError = { code: getCount() > 50 ? 'INVALID_QUANTITY' : 'INVALID_ITEMS' }; errorMessage = apiErrorMessage(orderError); renderCheckout(); checkoutContent.querySelector('[data-checkout-back]')?.focus(); return; }
-    for (const field of form.querySelectorAll('input, select')) { field.setCustomValidity(''); if (field.required && !String(field.value).trim()) field.setCustomValidity(l('Completa este campo.', 'Please fill out this field.')); else if (field.name === 'name' && formValues.name.length < 2) field.setCustomValidity(l('Escribe tu nombre completo.', 'Please enter your full name.')); else if (field.name === 'address' && formValues.address.length < 5) field.setCustomValidity(l('Escribe una dirección de al menos 5 caracteres.', 'Enter an address of at least 5 characters.')); else if (field.name === 'city' && formValues.city.length < 2) field.setCustomValidity(l('Escribe el nombre de tu ciudad.', 'Please enter your city.')); else if (field.name === 'email' && (field.validity.typeMismatch || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formValues.email))) field.setCustomValidity(l('Escribe un correo electrónico válido.', 'Please enter a valid email address.')); }
+  cartContent.addEventListener("input", (event) => {
+    if (event.target.id === "cart-promo-code") promoCode = event.target.value;
+  });
+  cartContent.addEventListener("submit", (event) => {
+    if (event.target.id !== "cart-promo-form") return;
+    event.preventDefault();
+    const focusApply = document.activeElement?.matches(".cart-promo-button");
+    promoCode = String(new FormData(event.target).get("code") || "")
+      .trim()
+      .toUpperCase();
+    if (promoCode === "ZENIN10") {
+      discountApplied = true;
+      promoState = "success";
+    } else promoState = discountApplied ? "applied" : "invalid";
+    renderCart();
+    cartContent.querySelector(focusApply ? ".cart-promo-button" : "#cart-promo-code")?.focus();
+  });
+  for (const type of ["input", "change"])
+    checkoutContent.addEventListener(type, (event) => {
+      if (event.target.form?.id === "checkout-form") {
+        event.target.setCustomValidity?.("");
+        readForm(event.target.form);
+        if (type === "change" && event.target.name === "country") {
+          formValues.state = "";
+          renderCheckout();
+          checkoutContent.querySelector("#checkout-country")?.focus();
+        }
+      }
+    });
+  checkoutContent.addEventListener("click", (event) => {
+    if (event.target.closest("[data-inventory-retry]")) {
+      reloadInventory();
+      return;
+    }
+    if (event.target.closest("[data-commerce-close]")) {
+      closeDialog(checkoutDialog);
+      return;
+    }
+    if (event.target.closest("[data-checkout-back]")) openCart();
+    if (event.target.closest("[data-receipt-download]")) downloadReceipt();
+    if (event.target.closest("[data-receipt-print]")) printReceipt();
+  });
+  checkoutContent.addEventListener("submit", async (event) => {
+    if (event.target.id !== "checkout-form") return;
+    event.preventDefault();
+    if (submitting || !items.length) return;
+    const form = event.target;
+    readForm(form);
+    if (unavailableItemsBlock()) {
+      orderError = { code: "INVALID_PRODUCT" };
+      errorMessage = apiErrorMessage(orderError);
+      renderCheckout();
+      checkoutContent.querySelector("[data-checkout-back]")?.focus();
+      return;
+    }
+    if (getCount() > 50 || items.length > 40) {
+      orderError = { code: getCount() > 50 ? "INVALID_QUANTITY" : "INVALID_ITEMS" };
+      errorMessage = apiErrorMessage(orderError);
+      renderCheckout();
+      checkoutContent.querySelector("[data-checkout-back]")?.focus();
+      return;
+    }
+    for (const field of form.querySelectorAll("input, select")) {
+      field.setCustomValidity("");
+      if (field.required && !String(field.value).trim())
+        field.setCustomValidity(l("Completa este campo.", "Please fill out this field."));
+      else if (field.name === "name" && formValues.name.length < 2)
+        field.setCustomValidity(l("Escribe tu nombre completo.", "Please enter your full name."));
+      else if (field.name === "address" && formValues.address.length < 5)
+        field.setCustomValidity(
+          l("Escribe una dirección de al menos 5 caracteres.", "Enter an address of at least 5 characters."),
+        );
+      else if (field.name === "city" && formValues.city.length < 2)
+        field.setCustomValidity(l("Escribe el nombre de tu ciudad.", "Please enter your city."));
+      else if (
+        field.name === "email" &&
+        (field.validity.typeMismatch || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formValues.email))
+      )
+        field.setCustomValidity(l("Escribe un correo electrónico válido.", "Please enter a valid email address."));
+      else if (field.name === "phone" && formValues.phone && !/^\+?[0-9\s().-]{7,30}$/.test(formValues.phone))
+        field.setCustomValidity(l("Escribe un teléfono válido, por ejemplo +506 8888 8888.", "Enter a valid phone, e.g. +506 8888 8888."));
+    }
     if (!form.reportValidity() || !COUNTRIES.some(([code]) => code === formValues.country)) return;
-    const payload = { customer: { ...formValues }, items: items.map(item => ({ productId: item.id, shirt: item.shirt, size: item.size, quantity: item.quantity })), discountCode: discountApplied ? 'ZENIN10' : null, language: getLanguage() };
-    const fingerprint = JSON.stringify({ customer: payload.customer, items: payload.items, discountCode: payload.discountCode });
-    submitting = true; errorMessage = ''; orderError = null; renderCheckout();
+    const payload = {
+      customer: { ...formValues },
+      items: items.map((item) => ({ productId: item.id, shirt: item.shirt, size: item.size, quantity: item.quantity })),
+      discountCode: discountApplied ? "ZENIN10" : null,
+      language: getLanguage(),
+      returnUrl: `${location.origin}${location.pathname}`,
+    };
+    const fingerprint = JSON.stringify({
+      customer: payload.customer,
+      items: payload.items,
+      discountCode: payload.discountCode,
+    });
+    submitting = true;
+    errorMessage = "";
+    orderError = null;
+    renderCheckout();
     try {
       ensureInventory().catch(() => {});
-      if (pendingSubmission?.fingerprint !== fingerprint) pendingSubmission = { fingerprint, key: uniqueKey(), language: payload.language, attempted: false };
-      payload.idempotencyKey = pendingSubmission.key; payload.language = pendingSubmission.language; pendingSubmission.attempted = true;
+      if (pendingSubmission?.fingerprint !== fingerprint)
+        pendingSubmission = { fingerprint, key: uniqueKey(), language: payload.language, attempted: false };
+      payload.idempotencyKey = pendingSubmission.key;
+      payload.language = pendingSubmission.language;
+      pendingSubmission.attempted = true;
       const result = await createOrder(payload);
-      if (!result?.order?.id || !result.trackingToken || !result.order.totals || !result.order.customer?.name || !Array.isArray(result.order.items) || !Number.isFinite(Date.parse(result.order.createdAt)) || !['subtotal', 'discount', 'shipping', 'total'].every(key => Number.isFinite(result.order.totals[key]))) { const incomplete = new Error(); incomplete.code = 'ORDER_RESPONSE_INCOMPLETE'; throw incomplete; }
-      confirmedOrder = { order: result.order, token: result.trackingToken };
-      try { localStorage.setItem('zenin-last-order-v1', JSON.stringify({ id: result.order.id, token: result.trackingToken, createdAt: result.order.createdAt })); } catch {}
-      items = []; discountApplied = false; promoCode = ''; promoState = ''; pendingSubmission = null; save(); submitting = false; renderConfirmation(); refreshInventory().catch(() => {});
-      if (!checkoutDialog.open) checkoutDialog.showModal(); checkoutContent.querySelector('.close-button')?.focus();
-    } catch (error) { submitting = false; if (error.status >= 400 && error.status < 500 || error.code === 'INSUFFICIENT_STOCK') { if (pendingSubmission) pendingSubmission.attempted = false; } if (error.code === 'INSUFFICIENT_STOCK' && error.details?.items) error.details.items = error.details.items.map(item => ({ ...item, name: catalog.get(item.productId)?.name || item.name || item.productId })); orderError = error; errorMessage = apiErrorMessage(error); renderCheckout(); if (checkoutDialog.open) (checkoutContent.querySelector('.checkout-place-order:not(:disabled)') || checkoutContent.querySelector('[data-checkout-back]'))?.focus(); else announce(errorMessage); if (error.code === 'INSUFFICIENT_STOCK') refreshInventory().catch(() => {}); if (['INVALID_PRODUCT','PRODUCT_NOT_FOUND'].includes(error.code)) window.dispatchEvent(new CustomEvent('zenin:catalog-changed',{detail:{action:'refresh'}})); }
+      if (
+        !result?.order?.id ||
+        !result.trackingToken ||
+        !result.order.totals ||
+        !result.order.customer?.name ||
+        !Array.isArray(result.order.items) ||
+        !Number.isFinite(Date.parse(result.order.createdAt)) ||
+        !["subtotal", "discount", "shipping", "total"].every((key) => Number.isFinite(result.order.totals[key]))
+      ) {
+        const incomplete = new Error();
+        incomplete.code = "ORDER_RESPONSE_INCOMPLETE";
+        throw incomplete;
+      }
+      confirmedOrder = { order: result.order, token: result.trackingToken, payment: result.payment || null };
+      try {
+        localStorage.setItem(
+          "zenin-last-order-v1",
+          JSON.stringify({ id: result.order.id, token: result.trackingToken, createdAt: result.order.createdAt }),
+        );
+      } catch {}
+      items = [];
+      discountApplied = false;
+      promoCode = "";
+      promoState = "";
+      pendingSubmission = null;
+      save();
+      if (result.payment?.url) {
+        // Card data is entered on Tilopay's page; we come back to order tracking afterwards.
+        redirecting = true;
+        checkoutContent.innerHTML = `${heading(l("PAGO SEGURO", "SECURE PAYMENT"), "checkout")}<div class="checkout-confirmation checkout-redirect" role="status"><div class="checkout-confirmation-mark" aria-hidden="true">↗</div><h3>${l("Te llevamos a Tilopay…", "Taking you to Tilopay…")}</h3><p>${l("Tu pedido {id} quedó guardado. Completa el pago en la página segura de Tilopay; al terminar volverás aquí.", "Your order {id} is saved. Complete the payment on Tilopay's secure page; you'll come back here afterwards.", { id: esc(result.order.id) })}</p><a class="btn btn-primary" href="${esc(result.payment.url)}">${l("Ir a pagar", "Go to payment")} ↗</a></div>`;
+        window.location.assign(result.payment.url);
+        return;
+      }
+      submitting = false;
+      if (result.payment?.error) {
+        closeDialog(checkoutDialog);
+        announce(apiErrorMessage({ code: result.payment.error }));
+        window.location.hash = trackingHash();
+        return;
+      }
+      renderConfirmation();
+      refreshInventory().catch(() => {});
+      if (!checkoutDialog.open) checkoutDialog.showModal();
+      checkoutContent.querySelector(".close-button")?.focus();
+    } catch (error) {
+      submitting = false;
+      if ((error.status >= 400 && error.status < 500) || error.code === "INSUFFICIENT_STOCK") {
+        if (pendingSubmission) pendingSubmission.attempted = false;
+      }
+      if (error.code === "INSUFFICIENT_STOCK" && error.details?.items)
+        error.details.items = error.details.items.map((item) => ({
+          ...item,
+          name: catalog.get(item.productId)?.name || item.name || item.productId,
+        }));
+      orderError = error;
+      errorMessage = apiErrorMessage(error);
+      renderCheckout();
+      if (checkoutDialog.open)
+        (
+          checkoutContent.querySelector(".checkout-place-order:not(:disabled)") ||
+          checkoutContent.querySelector("[data-checkout-back]")
+        )?.focus();
+      else announce(errorMessage);
+      if (error.code === "INSUFFICIENT_STOCK") refreshInventory().catch(() => {});
+      if (["INVALID_PRODUCT", "PRODUCT_NOT_FOUND"].includes(error.code))
+        window.dispatchEvent(new CustomEvent("zenin:catalog-changed", { detail: { action: "refresh" } }));
+    }
   });
-  for (const dialog of [cartDialog, checkoutDialog]) dialog.addEventListener('click', event => { if (event.target !== dialog) return; const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeDialog(dialog); });
-  window.addEventListener('storage', event => { if (event.key !== CART_KEY || submitting) return; items = readCart(); notify(); if (cartDialog.open) renderCart(); if (checkoutDialog.open && !confirmedOrder) { readForm(checkoutContent.querySelector('#checkout-form')); if (items.length) renderCheckout(); else { closeDialog(checkoutDialog); openCart(); } } });
-  window.addEventListener('zenin:inventory', () => { if (submitting) return; const active = document.activeElement; const activeId = active?.getAttribute?.('id'); const index = active?.dataset?.cartQuantity, delta = active?.dataset?.cartDelta; if (checkoutDialog.open && !confirmedOrder) readForm(checkoutContent.querySelector('#checkout-form')); if (cartDialog.open) renderCart(); if (checkoutDialog.open && !confirmedOrder) renderCheckout(); if (activeId) document.getElementById(activeId)?.focus(); else if (index !== undefined) restoreCartFocus(Number(index), Number(delta)); });
-  window.addEventListener('zenin:language', () => { if (orderError) errorMessage = apiErrorMessage(orderError); const active = document.activeElement; const id = active?.id; const quantity = active?.dataset?.cartQuantity, delta = active?.dataset?.cartDelta; const applyFocused = active?.matches?.('.cart-promo-button'); const selection = active && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null; if (checkoutDialog.open && !confirmedOrder) readForm(checkoutContent.querySelector('#checkout-form')); if (cartDialog.open) renderCart(); if (checkoutDialog.open) confirmedOrder ? renderConfirmation() : renderCheckout(); let target = id ? document.getElementById(id) : quantity !== undefined ? cartContent.querySelector(`[data-cart-quantity="${quantity}"][data-cart-delta="${delta}"]`) : applyFocused ? cartContent.querySelector('.cart-promo-button') : null; target?.focus(); if (selection && target?.setSelectionRange && target.type !== 'email') { try { target.setSelectionRange(...selection); } catch {} } });
-  const setProducts = nextProducts => {
-    if(!Array.isArray(nextProducts))return;
-    activeIds=new Set(nextProducts.map(product=>String(product.id)));
-    for(const product of nextProducts)catalog.set(String(product.id),product);
-    for(const item of items)if(itemIsAvailable(item))item.snapshot=snapshotFor(catalog.get(item.id));
-    save();if(submitting)return;
-    const activeId=document.activeElement?.getAttribute?.('id');
-    if(checkoutDialog.open&&!confirmedOrder)readForm(checkoutContent.querySelector('#checkout-form'));
-    if(cartDialog.open)renderCart();if(checkoutDialog.open&&!confirmedOrder)renderCheckout();
-    if(activeId)document.getElementById(activeId)?.focus();
+  for (const dialog of [cartDialog, checkoutDialog])
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const rect = dialog.getBoundingClientRect();
+      if (
+        event.clientX < rect.left ||
+        event.clientX > rect.right ||
+        event.clientY < rect.top ||
+        event.clientY > rect.bottom
+      )
+        closeDialog(dialog);
+    });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== CART_KEY || submitting) return;
+    items = readCart();
+    notify();
+    if (cartDialog.open) renderCart();
+    if (checkoutDialog.open && !confirmedOrder) {
+      readForm(checkoutContent.querySelector("#checkout-form"));
+      if (items.length) renderCheckout();
+      else {
+        closeDialog(checkoutDialog);
+        openCart();
+      }
+    }
+  });
+  window.addEventListener("zenin:inventory", () => {
+    if (submitting) return;
+    const active = document.activeElement;
+    const activeId = active?.getAttribute?.("id");
+    const index = active?.dataset?.cartQuantity,
+      delta = active?.dataset?.cartDelta;
+    if (checkoutDialog.open && !confirmedOrder) readForm(checkoutContent.querySelector("#checkout-form"));
+    if (cartDialog.open) renderCart();
+    if (checkoutDialog.open && !confirmedOrder) renderCheckout();
+    if (activeId) document.getElementById(activeId)?.focus();
+    else if (index !== undefined) restoreCartFocus(Number(index), Number(delta));
+  });
+  window.addEventListener("zenin:language", () => {
+    if (orderError) errorMessage = apiErrorMessage(orderError);
+    const active = document.activeElement;
+    const id = active?.id;
+    const quantity = active?.dataset?.cartQuantity,
+      delta = active?.dataset?.cartDelta;
+    const applyFocused = active?.matches?.(".cart-promo-button");
+    const selection = active && "selectionStart" in active ? [active.selectionStart, active.selectionEnd] : null;
+    if (checkoutDialog.open && !confirmedOrder) readForm(checkoutContent.querySelector("#checkout-form"));
+    if (cartDialog.open) renderCart();
+    if (checkoutDialog.open) confirmedOrder ? renderConfirmation() : renderCheckout();
+    let target = id
+      ? document.getElementById(id)
+      : quantity !== undefined
+        ? cartContent.querySelector(`[data-cart-quantity="${quantity}"][data-cart-delta="${delta}"]`)
+        : applyFocused
+          ? cartContent.querySelector(".cart-promo-button")
+          : null;
+    target?.focus();
+    if (selection && target?.setSelectionRange && target.type !== "email") {
+      try {
+        target.setSelectionRange(...selection);
+      } catch {}
+    }
+  });
+  const setProducts = (nextProducts) => {
+    if (!Array.isArray(nextProducts)) return;
+    activeIds = new Set(nextProducts.map((product) => String(product.id)));
+    for (const product of nextProducts) catalog.set(String(product.id), product);
+    for (const item of items) if (itemIsAvailable(item)) item.snapshot = snapshotFor(catalog.get(item.id));
+    save();
+    if (submitting) return;
+    const activeId = document.activeElement?.getAttribute?.("id");
+    if (checkoutDialog.open && !confirmedOrder) readForm(checkoutContent.querySelector("#checkout-form"));
+    if (cartDialog.open) renderCart();
+    if (checkoutDialog.open && !confirmedOrder) renderCheckout();
+    if (activeId) document.getElementById(activeId)?.focus();
   };
   save();
   return { openCart, addItem, getCount, onChange, setProducts };

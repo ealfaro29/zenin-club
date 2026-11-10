@@ -1,5 +1,5 @@
-import { API_BASE_URL } from './config.js?v=45';
-import { l, productName, colorLabel } from './i18n.js?v=45';
+import { API_BASE_URL } from './config.js?v=46';
+import { l, productName, colorLabel } from './i18n.js?v=46';
 
 export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   if (!API_BASE_URL) {
@@ -42,6 +42,10 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
 }
 
 export const getProducts = () => apiRequest('/products');
+export const getCollections = () => apiRequest('/collections');
+export const getLanding = () => apiRequest('/settings/landing');
+export const getPaymentConfig = () => apiRequest('/payments/config');
+export const payOrder = ({ id, token }) => apiRequest('/orders/pay', { method: 'POST', body: { id, token } });
 export const createOrder = (payload) => apiRequest('/orders', { method: 'POST', body: payload });
 export const trackOrder = ({ id, token, email }) => apiRequest('/orders/track', { method: 'POST', body: { id, ...(token ? { token } : {}), ...(email ? { email } : {}) } });
 
@@ -66,6 +70,29 @@ export function apiErrorMessage(error) {
     BASE_CHANGED: l('La base cambió en otro dispositivo. Actualiza los datos antes de guardar.', 'The base changed on another device. Refresh before saving.'),
     BASE_NOT_FOUND: l('No encontramos esta camiseta base. Actualiza los datos.', 'This shirt base was not found. Refresh the data.'),
     BASE_SIZE_IN_USE: l('Hay productos que usan las tallas de esta base. Retíralos antes de cambiar las tallas.', 'Products use this base’s sizes. Remove those products before changing sizes.'),
+    INVALID_COLLECTION: l('Elige una colección activa.', 'Choose an active collection.'),
+    COLLECTION_IN_USE: l('Esta colección tiene productos activos. Muévelos o archívalos antes de archivarla.', 'This collection has active products. Move or archive them first.'),
+    COLLECTION_CHANGED: l('La colección cambió en otro dispositivo. Actualiza antes de guardar.', 'The collection changed on another device. Refresh before saving.'),
+    COLLECTION_NOT_FOUND: l('No encontramos esta colección. Actualiza los datos.', 'This collection was not found. Refresh the data.'),
+    BACK_PHOTO_REQUIRED: l('Para imprimir en la espalda, cada color elegido necesita su foto de espalda. Súbela en Camisetas.', 'Back prints need a back photo for every selected color. Upload it in Shirts.'),
+    ARTICLE_BASE: l('Edita las variantes de este artículo desde Artículos.', 'Edit this article’s variants from Articles.'),
+    SLUG_TAKEN: l('Ya existe otro elemento con esa dirección web. Cambia el nombre o la URL.', 'Another item already uses that URL. Change the name or URL.'),
+    VIDEO_REQUIRED: l('Elige un video MP4 o WebM.', 'Choose an MP4 or WebM video.'),
+    VIDEO_TOO_LARGE: l('El video supera 50 MB. Expórtalo más corto o en menor calidad (1080p H.264 suele bastar).', 'The video exceeds 50 MB. Export it shorter or smaller (1080p H.264 is usually enough).'),
+    INVALID_VIDEO: l('El archivo no es un video MP4 o WebM válido.', 'The file is not a valid MP4 or WebM video.'),
+    UNPLAYABLE_VIDEO: l('Este video no se puede reproducir en el navegador. Expórtalo como MP4 (H.264).', 'This video cannot play in browsers. Export it as MP4 (H.264).'),
+    INVALID_VIDEO_URL: l('Uno de los videos ya no está disponible. Vuelve a subirlo.', 'One of the videos is no longer available. Upload it again.'),
+    LENGTH_REQUIRED: l('No se pudo leer el tamaño del video. Vuelve a elegirlo.', 'The video size could not be read. Choose it again.'),
+    SETTINGS_CHANGED: l('El landing cambió en otro dispositivo. Recarga antes de publicar.', 'The landing changed on another device. Reload before publishing.'),
+    PAYMENT_UNAVAILABLE: l('No pudimos abrir la página de pago. Tu pedido quedó guardado: reintenta el pago desde el seguimiento.', 'We could not open the payment page. Your order is saved: retry the payment from order tracking.'),
+    PAYMENTS_DISABLED: l('Los pagos en línea no están activos en este momento.', 'Online payments are not active right now.'),
+    ORDER_ALREADY_PAID: l('Este pedido ya está pagado.', 'This order is already paid.'),
+    ORDER_NOT_PAYABLE: l('Este pedido ya no se puede pagar. Haz un pedido nuevo.', 'This order can no longer be paid. Please place a new order.'),
+    ORDER_NOT_REFUNDABLE: l('Este pedido no tiene un pago aprobado para reembolsar.', 'This order has no approved payment to refund.'),
+    REFUND_REJECTED: l('Tilopay rechazó el reembolso. Revisa la transacción en el panel de Tilopay.', 'Tilopay rejected the refund. Check the transaction in the Tilopay dashboard.'),
+    PAYMENT_CREDENTIALS_INVALID: l('Tilopay rechazó el usuario o la contraseña API. Cópialos de nuevo desde el panel de Tilopay.', 'Tilopay rejected the API user or password. Copy them again from the Tilopay dashboard.'),
+    PAYMENT_KEY_INVALID: l('Tilopay rechazó la key de la integración. Revisa que sea la de Integración con plataformas.', 'Tilopay rejected the integration key. Make sure it is the one under Integración con plataformas.'),
+    PAYMENT_CREDENTIALS_MISSING: l('Completa el usuario API, la contraseña API y la key.', 'Enter the API user, API password and key.'),
     PNG_REQUIRED: l('Selecciona un archivo PNG.', 'Select a PNG file.'),
     DESIGN_TOO_LARGE: l('El PNG supera el máximo de 5 MB.', 'The PNG exceeds the 5 MB limit.'),
     DESIGN_DIMENSIONS: l('El PNG supera el límite de dimensiones o 16 megapíxeles.', 'The PNG exceeds the dimension or 16 megapixel limit.'),

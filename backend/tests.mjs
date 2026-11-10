@@ -15,6 +15,8 @@ const catalogMigration = await readFile(new URL('./migrations/0004_products.sql'
 const designMigration = await readFile(new URL('./migrations/0005_product_designs.sql', import.meta.url), 'utf8');
 const archiveDemoMigration = await readFile(new URL('./migrations/0006_archive_demo_catalog.sql', import.meta.url), 'utf8');
 const basesMigration = await readFile(new URL('./migrations/0007_garment_bases.sql', import.meta.url), 'utf8');
+const mediaMigration = await readFile(new URL('./migrations/0010_media.sql', import.meta.url), 'utf8');
+const collectionsMigration = await readFile(new URL('./migrations/0008_collections_articles.sql', import.meta.url), 'utf8');
 const seededProducts = [...catalogMigration.matchAll(/, '(\{"id":.*\})' WHERE NOT EXISTS/g)]
   .map(match => JSON.parse(match[1].replaceAll("''", "'")));
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -66,7 +68,11 @@ class D1Adapter {
 class R2Adapter {
   objects = new Map();
   async put(key, bytes) { this.objects.set(key, new Uint8Array(bytes)); }
-  async get(key) { return this.objects.has(key) ? { body: this.objects.get(key) } : null; }
+  async get(key, options = {}) {
+    if (!this.objects.has(key)) return null;
+    const bytes = this.objects.get(key);
+    return { body: options.range ? bytes.slice(options.range.offset, options.range.offset + options.range.length) : bytes };
+  }
 }
 
 function environment(path, bootstrap = schema) {
@@ -463,7 +469,8 @@ test('legacy inventory migration preserves orders, honors active demand and is r
   assert.ok(schema.includes(softStockMigration), 'Fresh schema must include the soft-stock migration');
   assert.ok(!schema.includes('midnight-snack-tee'), 'Fresh schema must not create demo products');
   assert.ok(schema.includes(designMigration), 'Fresh schema must include the design and color migration');
-  assert.ok(schema.endsWith(basesMigration), 'Fresh schema must include the reusable bases migration');
+  assert.ok(schema.includes(basesMigration), 'Fresh schema must include the reusable bases migration');
+  assert.ok(schema.includes(collectionsMigration.split('\n').slice(2).join('\n')), 'Fresh schema must include the collections migration');
   const baseSchema = schema.split('-- Inventory bootstrap')[0];
   const env = environment(undefined, baseSchema); t.after(() => env.DB.close());
   const token = await adminToken(env);
@@ -1012,4 +1019,309 @@ test('archiving a base after its catalog read cannot create a product referring 
   }) });
   assert.equal(result.status, 400); assert.equal(result.data.error.code, 'INVALID_COLOR');
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first('n'), 16);
+});
+
+test('collections, per-type prices and front/back prints drive the catalog and server-side order prices', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const imageUrl = (await uploadPng(env, token)).data.designUrl;
+  const backUrl = (await uploadPng(env, token, testPng(3, 3))).data.designUrl;
+  const collectionBody = { name: 'Summer Drop', nameEs: 'Drop de verano', description: 'Hot tees', coverUrl: imageUrl, accent: '#FF6600', idempotencyKey: crypto.randomUUID() };
+  assert.equal((await request(env, '/admin/collections', { method: 'POST', body: collectionBody })).status, 401);
+  assert.equal((await request(env, '/admin/collections', { method: 'POST', token, body: { ...collectionBody, coverUrl: '' } })).status, 400);
+  const created = await request(env, '/admin/collections', { method: 'POST', token, body: collectionBody });
+  assert.equal(created.status, 201);
+  const collection = created.data.collection;
+  assert.equal(collection.slug, 'drop-de-verano'); assert.equal(collection.accent, '#ff6600');
+  assert.equal((await request(env, '/admin/collections', { method: 'POST', token, body: collectionBody })).data.collection.id, collection.id);
+  assert.equal((await request(env, '/admin/collections', { method: 'POST', token, body: { ...collectionBody, idempotencyKey: crypto.randomUUID() } })).data.error.code, 'SLUG_TAKEN');
+  assert.deepEqual((await request(env, '/collections')).data.collections.map(row => row.slug), ['drop-de-verano']);
+  const regular = (await request(env, '/admin/bases', { method: 'POST', token, body: { name: 'Classic', type: 'Regular', weightGsm: 180, sizes: ['S', 'M'],
+    colors: [{ name: 'White', hex: '#ffffff', imageUrl, backImageUrl: imageUrl }, { name: 'Sand', hex: '#d9c6a5', imageUrl }],
+    printArea: { x: 30, y: 25, w: 40, h: 45 } } })).data.base;
+  assert.deepEqual(regular.printArea, { x: 30, y: 25, w: 40, h: 45 }); assert.equal(regular.colors[0].backImageUrl, imageUrl);
+  const oversize = (await request(env, '/admin/bases', { method: 'POST', token, body: { name: 'Oversize', type: 'Oversize', weightGsm: 260, sizes: ['M', 'L'],
+    colors: [{ name: 'Black', hex: '#111111', imageUrl, backImageUrl: imageUrl }] } })).data.base;
+  const draft = { name: 'Sun Tee', nameEs: 'Camiseta Sol', collectionId: collection.id, printSides: 'both', frontDesignUrl: imageUrl, backDesignUrl: backUrl,
+    availableShirts: [regular.colors[0].shirt, regular.colors[1].shirt, oversize.colors[0].shirt], shirt: oversize.colors[0].shirt,
+    basePrices: { [regular.id]: 30, [oversize.id]: 38.5 }, idempotencyKey: crypto.randomUUID() };
+  const missingBack = await request(env, '/admin/products', { method: 'POST', token, body: draft });
+  assert.equal(missingBack.status, 400); assert.equal(missingBack.data.error.code, 'BACK_PHOTO_REQUIRED');
+  assert.equal((await request(env, '/admin/products', { method: 'POST', token, body: { ...draft, collectionId: 'col-00000000-0000-0000-0000-000000000000' } })).data.error.code, 'INVALID_COLLECTION');
+  const body = { ...draft, availableShirts: [regular.colors[0].shirt, oversize.colors[0].shirt] };
+  const product = (await request(env, '/admin/products', { method: 'POST', token, body })).data.product;
+  assert.equal(product.price, 30); assert.equal(product.category, 'drop-de-verano'); assert.equal(product.collection, 'Summer Drop');
+  assert.equal(product.designUrl, imageUrl); assert.equal(product.backDesignUrl, backUrl); assert.equal(product.printSides, 'both');
+  const catalog = (await request(env, '/products')).data.products.find(row => row.id === product.id);
+  assert.deepEqual(catalog.shirtOptions.map(option => option.price), [30, 38.5]);
+  assert.deepEqual(catalog.shirtOptions[0].printArea, { x: 30, y: 25, w: 40, h: 45 });
+  const order = await request(env, '/orders', { method: 'POST', body: checkout({ items: [
+    { productId: product.id, shirt: oversize.colors[0].shirt, size: 'L', quantity: 2 }, { productId: product.id, shirt: regular.colors[0].shirt, size: 'S', quantity: 1 }] }) });
+  assert.equal(order.status, 201);
+  assert.deepEqual(order.data.order.items.map(item => item.unitPrice).sort(), [30, 38.5]);
+  assert.equal(order.data.order.totals.subtotal, 107); assert.equal(order.data.order.items[0].backDesignUrl, backUrl);
+  const renamed = await request(env, `/admin/collections/${collection.id}`, { method: 'PATCH', token, body: { version: 1, name: 'Summer Club' } });
+  assert.equal(renamed.status, 200); assert.equal(renamed.data.collection.slug, 'drop-de-verano');
+  assert.equal((await request(env, '/products')).data.products.find(row => row.id === product.id).collection, 'Summer Club');
+  assert.equal((await request(env, `/admin/collections/${collection.id}`, { method: 'DELETE', token, body: { version: 2 } })).data.error.code, 'COLLECTION_IN_USE');
+  const repriced = await request(env, `/admin/products/${product.id}`, { method: 'PATCH', token, body: { version: 1, basePrices: { [regular.id]: 25, [oversize.id]: 40 } } });
+  assert.equal(repriced.status, 200); assert.equal(repriced.data.product.price, 25);
+  const frontOnly = await request(env, `/admin/products/${product.id}`, { method: 'PATCH', token, body: { version: 2, printSides: 'front' } });
+  assert.equal(frontOnly.data.product.backDesignUrl, ''); assert.equal(frontOnly.data.product.designUrl, imageUrl);
+  const tracked = await request(env, '/orders/track', { method: 'POST', body: { id: order.data.order.id, token: order.data.trackingToken } });
+  assert.deepEqual(tracked.data.order.items.map(item => item.unitPrice).sort(), [30, 38.5]);
+  assert.equal((await request(env, `/admin/products/${product.id}`, { method: 'DELETE', token, body: { version: 3 } })).status, 200);
+  const archived = await request(env, `/admin/collections/${collection.id}`, { method: 'DELETE', token, body: { version: 2 } });
+  assert.equal(archived.status, 200); assert.equal((await request(env, '/collections')).data.collections.length, 0);
+  assert.equal((await request(env, '/admin/collections?includeArchived=true', { token })).data.collections[0].active, false);
+});
+
+test('articles own hidden variant bases, sell with stock and survive edits, archive and catalog migrations', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const token = await adminToken(env);
+  const imageUrl = (await uploadPng(env, token)).data.designUrl;
+  const collection = (await request(env, '/admin/collections', { method: 'POST', token, body: { name: 'Accesorios', coverUrl: imageUrl } })).data.collection;
+  const body = { name: 'Club Bottle', nameEs: 'Botella Club', articleType: 'Botella', collectionId: collection.id, price: 18,
+    sizes: ['500 ml', '750 ml'], variants: [{ name: 'Matte black', hex: '#1a1a1a', imageUrl }, { name: 'Sky', hex: '#88bbee', imageUrl }],
+    defaultVariant: 1, initialStock: 4, idempotencyKey: crypto.randomUUID() };
+  assert.equal((await request(env, '/admin/articles', { method: 'POST', body })).status, 401);
+  assert.equal((await request(env, '/admin/articles', { method: 'POST', token, body: { ...body, variants: [] } })).status, 400);
+  const created = await request(env, '/admin/articles', { method: 'POST', token, body });
+  assert.equal(created.status, 201);
+  const article = created.data.product;
+  assert.equal(article.kind, 'article'); assert.equal(article.designUrl, ''); assert.equal(article.articleType, 'Botella');
+  assert.equal(article.shirt, article.availableShirts[1]); assert.equal(article.category, 'accesorios');
+  assert.equal((await request(env, '/admin/articles', { method: 'POST', token, body })).data.product.id, article.id);
+  assert.equal((await request(env, '/bases')).data.bases.length > 0, true);
+  assert.equal((await request(env, '/bases')).data.bases.some(base => base.kind === 'article'), false);
+  assert.equal((await request(env, '/admin/bases?kind=article', { token })).data.bases.length, 1);
+  const baseId = article.shirtOptions[0].baseId;
+  assert.equal((await request(env, `/admin/bases/${baseId}`, { method: 'PATCH', token, body: { version: 1, name: 'Hijack' } })).data.error.code, 'ARTICLE_BASE');
+  const garment = (await request(env, '/bases')).data.bases[0];
+  assert.equal((await request(env, '/admin/products', { method: 'POST', token, body: productDraft({ shirt: article.shirt, availableShirts: [article.shirt] }) })).data.error.code, 'INVALID_COLOR');
+  assert.ok(garment);
+  const inventory = (await request(env, '/inventory')).data.variants.filter(row => row.productId === article.id);
+  assert.equal(inventory.length, 4); assert.ok(inventory.every(row => row.stock === 4));
+  const order = await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: article.id, shirt: article.shirt, size: '750 ml', quantity: 2 }] }) });
+  assert.equal(order.status, 201); assert.equal(order.data.order.items[0].unitPrice, 18); assert.equal(order.data.order.items[0].kind, 'article');
+  assert.equal((await inventoryRow(env, article.id, article.shirt, '750 ml')).stock, 2);
+  const edited = await request(env, `/admin/articles/${article.id}`, { method: 'PATCH', token, body: { version: 1, price: 20, sizes: ['Única'],
+    variants: [{ ...article.shirtOptions[1], shirt: article.shirt, name: 'Sky blue', imageUrl }, { name: 'Forest', hex: '#225533', imageUrl }] } });
+  assert.equal(edited.status, 200);
+  const updated = edited.data.product;
+  assert.equal(updated.version, 2); assert.equal(updated.price, 20); assert.equal(updated.availableShirts.length, 2);
+  assert.ok(updated.availableShirts.includes(article.shirt)); assert.ok(!updated.availableShirts.includes(article.availableShirts[0]));
+  assert.equal(updated.shirtOptions.find(option => option.shirt === article.shirt).colorName, 'Sky blue');
+  assert.deepEqual(updated.shirtOptions[0].sizes, ['Única']); assert.equal('revision' in updated, false);
+  const publicArticle = (await request(env, '/products')).data.products.find(row => row.id === article.id);
+  assert.equal('revision' in publicArticle, false); assert.equal(publicArticle.shirtOptions[0].price, 20);
+  assert.equal((await request(env, `/admin/articles/${article.id}`, { method: 'PATCH', token, body: { version: 1, price: 21 } })).data.error.code, 'PRODUCT_CHANGED');
+  assert.equal((await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: article.id, shirt: article.shirt, size: '750 ml', quantity: 1 }] }) })).data.error.code, 'INVALID_SIZE');
+  assert.equal((await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: article.id, shirt: article.shirt, size: 'Única', quantity: 1 }] }) })).status, 201);
+  const tracked = await request(env, '/orders/track', { method: 'POST', body: { id: order.data.order.id, token: order.data.trackingToken } });
+  assert.equal(tracked.data.order.items[0].colorName, 'Sky'); assert.equal(tracked.data.order.items[0].size, '750 ml');
+  env.DB.database.exec(archiveDemoMigration); env.DB.database.exec(collectionsMigration); env.DB.database.exec(collectionsMigration);
+  assert.ok((await request(env, '/products')).data.products.some(row => row.id === article.id), 'Rerunning migrations keeps articles active');
+  assert.equal((await request(env, `/admin/products/${article.id}`, { method: 'DELETE', token, body: { version: 2 } })).status, 200);
+  const restored = await request(env, `/admin/products/${article.id}`, { method: 'PATCH', token, body: { version: 3, active: true } });
+  assert.equal(restored.status, 200); assert.equal(restored.data.product.kind, 'article');
+  env.DB.database.exec(await readFile(new URL('./migrations/0009_empty_catalog.sql', import.meta.url), 'utf8'));
+  assert.equal((await request(env, '/products')).data.products.length, 0);
+  assert.equal((await request(env, '/bases')).data.bases.length, 0);
+  assert.equal((await request(env, '/collections')).data.collections.length, 0);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 2);
+});
+
+function testVideo(size = 4096) {
+  const bytes = new Uint8Array(size);
+  bytes.set([0, 0, 0, 24, ...new TextEncoder().encode('ftypisom')]);
+  for (let index = 12; index < size; index++) bytes[index] = index % 251;
+  return bytes;
+}
+async function uploadVideo(env, token, bytes = testVideo(), type = 'video/mp4', headers = {}) {
+  const response = await worker.fetch(new Request('https://orders.example/admin/videos', {
+    method: 'POST', headers: { 'Content-Type': type, 'Content-Length': String(bytes.length), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers }, body: bytes,
+  }), env);
+  return { status: response.status, data: await response.json() };
+}
+
+test('videos upload with authentication, stream by byte ranges and decorate collections and the landing', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  assert.ok(schema.includes(mediaMigration.split('\n').slice(2).join('\n')), 'Fresh schema must include the media migration');
+  const token = await adminToken(env);
+  assert.equal((await uploadVideo(env, null)).status, 401);
+  assert.equal((await uploadVideo(env, token, new Uint8Array(64))).data.error.code, 'INVALID_VIDEO');
+  assert.equal((await uploadVideo(env, token, testVideo(), 'image/png')).data.error.code, 'VIDEO_REQUIRED');
+  assert.equal((await uploadVideo(env, token, testVideo(), 'video/mp4', { 'Content-Length': String(60 * 1024 * 1024) })).status, 413);
+  const video = testVideo();
+  const uploaded = await uploadVideo(env, token, video);
+  assert.equal(uploaded.status, 201); assert.match(uploaded.data.videoUrl, /\/videos\/[a-f0-9]{64}\.mp4$/);
+  assert.equal((await uploadVideo(env, token, video)).data.videoUrl, uploaded.data.videoUrl);
+  const full = await worker.fetch(new Request(uploaded.data.videoUrl), env);
+  assert.equal(full.status, 200); assert.equal(full.headers.get('Accept-Ranges'), 'bytes'); assert.equal(full.headers.get('Content-Type'), 'video/mp4');
+  assert.equal((await full.arrayBuffer()).byteLength, video.length);
+  const partial = await worker.fetch(new Request(uploaded.data.videoUrl, { headers: { Range: 'bytes=100-199' } }), env);
+  assert.equal(partial.status, 206); assert.equal(partial.headers.get('Content-Range'), `bytes 100-199/${video.length}`);
+  assert.deepEqual(new Uint8Array(await partial.arrayBuffer()), video.slice(100, 200));
+  const tail = await worker.fetch(new Request(uploaded.data.videoUrl, { headers: { Range: 'bytes=-10' } }), env);
+  assert.equal(tail.headers.get('Content-Range'), `bytes ${video.length - 10}-${video.length - 1}/${video.length}`);
+  assert.equal((await worker.fetch(new Request(uploaded.data.videoUrl, { headers: { Range: `bytes=${video.length}-` } }), env)).status, 416);
+  assert.equal((await worker.fetch(new Request(uploaded.data.videoUrl.replace('.mp4', '.webm')), env)).status, 404);
+  const poster = (await uploadPng(env, token)).data.designUrl;
+  const collection = (await request(env, '/admin/collections', { method: 'POST', token, body: { name: 'Reel', coverUrl: poster,
+    videos: [{ url: uploaded.data.videoUrl, posterUrl: poster }] } })).data.collection;
+  assert.deepEqual(collection.videos, [{ url: uploaded.data.videoUrl, posterUrl: poster }]);
+  assert.equal((await request(env, '/admin/collections', { method: 'POST', token, body: { name: 'Bad reel', coverUrl: poster,
+    videos: [{ url: 'https://evil.example/videos/x.mp4' }] } })).data.error.code, 'INVALID_VIDEO_URL');
+  assert.deepEqual((await request(env, '/collections')).data.collections[0].videos[0].url, uploaded.data.videoUrl);
+  const kept = await request(env, `/admin/collections/${collection.id}`, { method: 'PATCH', token, body: { version: 1, name: 'Reel 2' } });
+  assert.equal(kept.data.collection.videos.length, 1);
+  assert.deepEqual((await request(env, '/settings/landing')).data.landing.slides, []);
+  const slide = { videoUrl: uploaded.data.videoUrl, posterUrl: poster, title: 'Nuevo drop', buttonLabel: 'Ver', link: `#shop/${collection.slug}` };
+  assert.equal((await request(env, '/admin/settings/landing', { method: 'PUT', body: { version: 0, slides: [slide] } })).status, 401);
+  assert.equal((await request(env, '/admin/settings/landing', { method: 'PUT', token, body: { version: 0, slides: [{ ...slide, link: 'javascript:alert(1)' }] } })).status, 400);
+  const saved = await request(env, '/admin/settings/landing', { method: 'PUT', token, body: { version: 0, slides: [slide, { ...slide, title: 'Dos' }] } });
+  assert.equal(saved.status, 200); assert.equal(saved.data.landing.version, 1); assert.equal(saved.data.landing.slides.length, 2);
+  assert.equal((await request(env, '/admin/settings/landing', { method: 'PUT', token, body: { version: 0, slides: [] } })).data.error.code, 'SETTINGS_CHANGED');
+  const publicLanding = (await request(env, '/settings/landing')).data.landing;
+  assert.equal(publicLanding.slides[0].title, 'Nuevo drop'); assert.equal('version' in publicLanding, false);
+  assert.equal((await request(env, '/admin/settings/landing', { method: 'PUT', token, body: { version: 1, slides: [] } })).data.landing.version, 2);
+  env.DB.database.exec(mediaMigration); env.DB.database.exec(mediaMigration);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM video_assets').first('n'), 1);
+});
+
+function fakeTilopay() {
+  const fake = { calls: [], transactions: new Map(), refunds: [] };
+  fake.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (!url.startsWith('https://app.tilopay.com/api/v1/')) throw new Error(`Unexpected fetch ${url}`);
+    const path = url.slice('https://app.tilopay.com/api/v1/'.length);
+    const body = JSON.parse(init.body || '{}');
+    fake.calls.push({ path, body, authorization: init.headers?.Authorization });
+    const reply = data => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+    if (path === 'login') return body.apiuser === 'api-user' && body.password === 'api-pass'
+      ? reply({ access_token: 'tilo-token', token_type: 'bearer', expires_in: 86400 }) : reply({ error: 'Unauthorized' });
+    if (path === 'loginSdk') return body.apiuser === 'api-user' && body.password === 'api-pass' && body.key === 'key-123'
+      ? reply({ access_token: 'sdk-token', token_type: 'bearer', expires_in: '2026-01-01 00:00:00' }) : reply({ error: 'Unauthorized' });
+    if (path === 'processPayment') return reply({ type: '100', html: 'Use url redirect', url: `https://app.tilopay.com/pay/${body.orderNumber}` });
+    if (path === 'consult') return reply({ type: '200', message: '', response: fake.transactions.get(body.orderNumber) || [] });
+    if (path === 'processModification') { fake.refunds.push(body); return reply({ type: '100', transactionId: 1, ReasonCode: '1101', ReasonCodeDescription: 'Transaccion aprobada' }); }
+    return reply({ type: '400', message: 'unknown' });
+  };
+  return fake;
+}
+
+test('Tilopay payments are confirmed only by consult, retried with new order numbers, expired by cron and refundable', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  Object.assign(env, { TILOPAY_API_USER: 'api-user', TILOPAY_API_PASSWORD: 'api-pass', TILOPAY_KEY: 'key-123', SITE_URL: 'https://ealfaro29.github.io/zenin-club' });
+  const fake = fakeTilopay();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fake.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const token = await adminToken(env);
+  assert.deepEqual((await request(env, '/payments/config')).data, { enabled: true, provider: 'tilopay' });
+  const product = (await request(env, '/admin/products', { method: 'POST', token, body: productDraft() })).data.product;
+  const customer = { ...checkout().customer, phone: '+506 8888 7777', state: 'CR-H' };
+  const body = () => checkout({ customer, items: [{ productId: product.id, shirt: 2, size: 'M', quantity: 2 }] });
+  const noPhone = await request(env, '/orders', { method: 'POST', body: checkout({ items: [{ productId: product.id, shirt: 2, size: 'M', quantity: 1 }] }) });
+  assert.equal(noPhone.status, 400); assert.equal(noPhone.data.error.field, 'phone');
+
+  const first = await request(env, '/orders', { method: 'POST', body: body() });
+  assert.equal(first.status, 201); assert.equal(first.data.order.payment.status, 'pending');
+  const sent = fake.calls.find(call => call.path === 'processPayment').body;
+  assert.match(first.data.payment.url, /^https:\/\/app\.tilopay\.com\/pay\/ZC[A-Z0-9]{12}$/);
+  assert.equal(sent.amount, '107.90'); assert.equal(sent.currency, 'USD'); assert.equal(sent.billToState, 'CR-H'); assert.equal(sent.key, 'key-123');
+  assert.equal(sent.redirect, 'https://orders.example/payments/tilopay/return'); assert.equal(sent.capture, '1');
+  assert.equal(fake.calls.find(call => call.path === 'processPayment').authorization, 'bearer tilo-token');
+  const orderNumber = sent.orderNumber;
+  const forged = await worker.fetch(new Request(`https://orders.example/payments/tilopay/return?code=1&order=${orderNumber}&auth=999`), env);
+  assert.equal(forged.status, 303);
+  assert.equal(forged.headers.get('Location'), `https://ealfaro29.github.io/zenin-club/#order/${encodeURIComponent(first.data.order.id)}/${encodeURIComponent(first.data.trackingToken)}`);
+  let tracked = await request(env, '/orders/track', { method: 'POST', body: { id: first.data.order.id, token: first.data.trackingToken } });
+  assert.equal(tracked.data.order.payment.status, 'pending', 'A redirect with code=1 alone never marks the order paid');
+  fake.transactions.set(orderNumber, [{ id_tilopay: 7, orderNumber, amount: '107.90', currency: 'USD', code: '1', response: 'Transacción aprobada', auth: '123456', last: '5221', environment: 'Test', type: 'Payment' }]);
+  await worker.fetch(new Request(`https://orders.example/payments/tilopay/return?code=1&order=${orderNumber}`), env);
+  tracked = await request(env, '/orders/track', { method: 'POST', body: { id: first.data.order.id, token: first.data.trackingToken } });
+  assert.equal(tracked.data.order.payment.status, 'paid'); assert.equal(tracked.data.order.payment.environment, 'test');
+  assert.equal(tracked.data.order.payment.card, '•••• 5221'); assert.equal('events' in tracked.data.order.payment, false);
+  assert.equal((await request(env, '/orders/pay', { method: 'POST', body: { id: first.data.order.id, token: first.data.trackingToken } })).data.error.code, 'ORDER_ALREADY_PAID');
+
+  const second = await request(env, '/orders', { method: 'POST', body: body() });
+  const secondNumber = second.data.payment.orderNumber;
+  fake.transactions.set(secondNumber, [{ orderNumber: secondNumber, amount: '107.90', currency: 'USD', code: '2', response: 'Fondos insuficientes', type: 'Payment' }]);
+  await worker.fetch(new Request(`https://orders.example/payments/tilopay/return?code=2&order=${secondNumber}`), env);
+  const declined = (await request(env, '/orders/track', { method: 'POST', body: { id: second.data.order.id, token: second.data.trackingToken } })).data.order;
+  assert.equal(declined.payment.status, 'failed'); assert.equal(declined.payment.message, 'Fondos insuficientes');
+  assert.equal((await request(env, '/orders/pay', { method: 'POST', body: { id: second.data.order.id, token: 'wrong' } })).status, 404);
+  const retry = await request(env, '/orders/pay', { method: 'POST', body: { id: second.data.order.id, token: second.data.trackingToken } });
+  assert.equal(retry.status, 200); assert.notEqual(retry.data.payment.orderNumber, secondNumber);
+  const mismatch = retry.data.payment.orderNumber;
+  fake.transactions.set(mismatch, [{ orderNumber: mismatch, amount: '1.00', currency: 'USD', code: '1', type: 'Payment' }]);
+  await worker.fetch(new Request(`https://orders.example/payments/tilopay/return?code=1&order=${mismatch}`), env);
+  assert.equal((await request(env, '/orders/track', { method: 'POST', body: { id: second.data.order.id, token: second.data.trackingToken } })).data.order.payment.status, 'review');
+
+  const abandoned = await request(env, '/orders', { method: 'POST', body: body() });
+  const old = new Date(Date.now() - 2 * 3600000).toISOString();
+  env.DB.database.prepare('UPDATE orders SET created_at = ? WHERE id = ?').run(old, abandoned.data.order.id);
+  env.DB.database.prepare('UPDATE payment_attempts SET created_at = ? WHERE order_id = ?').run(old, abandoned.data.order.id);
+  const pending = [];
+  await worker.scheduled({}, env, { waitUntil: promise => pending.push(promise) });
+  await Promise.all(pending);
+  const expired = (await request(env, `/admin/orders/${abandoned.data.order.id}`, { token })).data.order;
+  assert.equal(expired.status, 'cancelled'); assert.equal(expired.payment.status, 'expired');
+  assert.equal((await request(env, `/admin/orders/${first.data.order.id}`, { token })).data.order.status, 'new');
+
+  const paid = (await request(env, `/admin/orders/${first.data.order.id}`, { token })).data.order;
+  assert.equal((await request(env, `/admin/orders/${first.data.order.id}/refund`, { method: 'POST', body: { expectedVersion: paid.version } })).status, 401);
+  assert.equal((await request(env, `/admin/orders/${first.data.order.id}/refund`, { method: 'POST', token, body: { expectedVersion: paid.version - 1 } })).data.error.code, 'ORDER_CHANGED');
+  const refunded = await request(env, `/admin/orders/${first.data.order.id}/refund`, { method: 'POST', token, body: { expectedVersion: paid.version } });
+  assert.equal(refunded.status, 200); assert.equal(refunded.data.order.payment.status, 'refunded'); assert.equal(refunded.data.order.status, 'cancelled');
+  assert.deepEqual(fake.refunds, [{ orderNumber, type: '2', amount: '107.90', key: 'key-123' }]);
+  assert.equal((await request(env, `/admin/orders/${first.data.order.id}/refund`, { method: 'POST', token, body: { expectedVersion: refunded.data.order.version } })).data.error.code, 'ORDER_NOT_REFUNDABLE');
+});
+
+test('without Tilopay credentials checkout keeps the no-charge flow', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  assert.deepEqual((await request(env, '/payments/config')).data, { enabled: false, provider: null });
+  const created = await request(env, '/orders', { method: 'POST', body: checkout() });
+  assert.equal(created.status, 201); assert.equal('payment' in created.data, false); assert.equal('payment' in created.data.order, false);
+});
+
+test('the store owner configures Tilopay from the admin; credentials are verified, encrypted and never returned', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const fake = fakeTilopay();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fake.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const token = await adminToken(env);
+  assert.equal((await request(env, '/admin/settings/payments')).status, 401);
+  const initial = (await request(env, '/admin/settings/payments', { token })).data.payments;
+  assert.equal(initial.enabled, false); assert.equal(initial.version, 0);
+  const wrongPassword = await request(env, '/admin/settings/payments', { method: 'PUT', token, body: { version: 0, enabled: true, apiUser: 'api-user', password: 'nope', key: 'key-123' } });
+  assert.equal(wrongPassword.data.error.code, 'PAYMENT_CREDENTIALS_INVALID');
+  const wrongKey = await request(env, '/admin/settings/payments/test', { method: 'POST', token, body: { apiUser: 'api-user', password: 'api-pass', key: 'key-999' } });
+  assert.equal(wrongKey.data.error.code, 'PAYMENT_KEY_INVALID');
+  assert.equal((await request(env, '/admin/settings/payments/test', { method: 'POST', token, body: { apiUser: 'api-user', password: 'api-pass', key: 'key-123' } })).data.ok, true);
+  assert.equal((await request(env, '/payments/config')).data.enabled, false);
+  const saved = await request(env, '/admin/settings/payments', { method: 'PUT', token, body: { version: 0, enabled: true, apiUser: 'api-user', password: 'api-pass', key: 'key-123' } });
+  assert.equal(saved.status, 200);
+  assert.deepEqual({ ...saved.data.payments, verifiedAt: Boolean(saved.data.payments.verifiedAt), updatedAt: undefined },
+    { provider: 'tilopay', enabled: true, apiUser: 'api-user', hasPassword: true, keyHint: '••••-123', verifiedAt: true, version: 1, updatedAt: undefined, usingWorkerSecrets: false });
+  const raw = await env.DB.prepare(`SELECT value_json FROM site_settings WHERE key = 'payments'`).first('value_json');
+  assert.equal(raw.includes('api-pass'), false); assert.equal(raw.includes('key-123'), false);
+  assert.deepEqual((await request(env, '/payments/config')).data, { enabled: true, provider: 'tilopay' });
+  const product = (await request(env, '/admin/products', { method: 'POST', token, body: productDraft() })).data.product;
+  const customer = { ...checkout().customer, phone: '88887777', state: 'CR-SJ' };
+  assert.equal((await request(env, '/orders', { method: 'POST', body: checkout({ customer, returnUrl: 'https://evil.example/shop/', items: [{ productId: product.id, shirt: 2, size: 'M', quantity: 1 }] }) })).data.error.field, 'returnUrl');
+  const order = await request(env, '/orders', { method: 'POST', body: checkout({ customer, returnUrl: 'https://ealfaro29.github.io/zenin-club/index.html?x=1#shop', items: [{ productId: product.id, shirt: 2, size: 'M', quantity: 1 }] }) });
+  assert.equal(order.status, 201); assert.ok(order.data.payment.url); assert.equal('returnUrl' in order.data.order, false);
+  assert.equal(fake.calls.filter(call => call.path === 'processPayment').at(-1).body.key, 'key-123');
+  const back = await worker.fetch(new Request(`https://orders.example/payments/tilopay/return?code=2&order=${order.data.payment.orderNumber}`), env);
+  assert.match(back.headers.get('Location'), /^https:\/\/ealfaro29\.github\.io\/zenin-club\/index\.html#order\//);
+  const kept = await request(env, '/admin/settings/payments', { method: 'PUT', token, body: { version: 1, enabled: true } });
+  assert.equal(kept.status, 200); assert.equal(kept.data.payments.keyHint, '••••-123');
+  assert.equal((await request(env, '/admin/settings/payments', { method: 'PUT', token, body: { version: 1, enabled: false } })).data.error.code, 'SETTINGS_CHANGED');
+  const disabled = await request(env, '/admin/settings/payments', { method: 'PUT', token, body: { version: 2, enabled: false } });
+  assert.equal(disabled.data.payments.enabled, false);
+  assert.equal((await request(env, '/payments/config')).data.enabled, false);
+  const offline = await request(env, '/orders', { method: 'POST', body: checkout() });
+  assert.equal(offline.status, 201); assert.equal('payment' in offline.data, false);
 });

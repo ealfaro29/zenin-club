@@ -1,5 +1,5 @@
-import { apiRequest } from './orders-api.js?v=45';
-import { l } from './i18n.js?v=45';
+import { apiRequest } from './orders-api.js?v=46';
+import { l } from './i18n.js?v=46';
 
 const MAX_AGE = 60000;
 const validSize = size => typeof size === 'string' && size.trim().length > 0 && size.length <= 24;

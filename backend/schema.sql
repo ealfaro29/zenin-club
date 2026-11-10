@@ -360,7 +360,8 @@ END;
 UPDATE products SET active = 0, version = version + 1,
  deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')),
  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-WHERE active = 1 AND COALESCE(json_extract(product_json,'$.designUrl'),'') = '';
+WHERE active = 1 AND COALESCE(json_extract(product_json,'$.designUrl'),'') = ''
+ AND COALESCE(json_extract(product_json,'$.kind'),'apparel') != 'article';
 
 -- Reusable garment bases (migrations/0007_garment_bases.sql).
 -- Rebuild only inventory to permit reusable base colors and custom sizes.
@@ -543,3 +544,66 @@ BEGIN
    AND s.value = json_extract(j.value,'$.size')))
  THEN RAISE(ABORT,'INVALID_SIZE') END;
 END;
+
+-- Collections and articles (migrations/0008_collections_articles.sql).
+CREATE TABLE IF NOT EXISTS collections (
+ id TEXT PRIMARY KEY,
+ slug TEXT NOT NULL UNIQUE,
+ active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+ version INTEGER NOT NULL DEFAULT 1,
+ sort_order INTEGER NOT NULL DEFAULT 0,
+ collection_json TEXT NOT NULL CHECK (json_valid(collection_json)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ creation_key_hash TEXT UNIQUE, creation_request_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS collections_active ON collections(active, sort_order, created_at);
+
+CREATE TRIGGER IF NOT EXISTS collection_archive_guard BEFORE UPDATE OF active ON collections
+WHEN NEW.active = 0 AND OLD.active = 1
+BEGIN
+ SELECT CASE WHEN EXISTS (SELECT 1 FROM products p
+  WHERE p.active = 1 AND json_extract(p.product_json,'$.collectionId') = NEW.id)
+ THEN RAISE(ABORT,'COLLECTION_IN_USE') END;
+END;
+
+-- Article bases (hidden variant sets of bottles, keychains…) change sizes from
+-- the article editor together with their single product.
+DROP TRIGGER IF EXISTS garment_base_size_guard;
+CREATE TRIGGER garment_base_size_guard BEFORE UPDATE OF base_json ON garment_bases
+WHEN json_extract(NEW.base_json,'$.sizes') != json_extract(OLD.base_json,'$.sizes')
+ AND COALESCE(json_extract(NEW.base_json,'$.kind'),'garment') != 'article'
+BEGIN
+ SELECT CASE WHEN EXISTS (SELECT 1 FROM products p, json_each(p.product_json,'$.shirtOptions') o
+  WHERE p.active = 1 AND json_extract(o.value,'$.baseId') = NEW.id)
+ THEN RAISE(ABORT,'BASE_SIZE_IN_USE') END;
+END;
+
+-- Videos and site settings (migrations/0010_media.sql).
+CREATE TABLE IF NOT EXISTS video_assets (
+ id TEXT PRIMARY KEY CHECK (length(id) = 64),
+ object_key TEXT NOT NULL UNIQUE,
+ content_type TEXT NOT NULL CHECK (content_type IN ('video/mp4', 'video/webm')),
+ byte_length INTEGER NOT NULL CHECK (byte_length BETWEEN 1 AND 52428800),
+ created_at TEXT NOT NULL,
+ actor TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS site_settings (
+ key TEXT PRIMARY KEY,
+ version INTEGER NOT NULL DEFAULT 1,
+ value_json TEXT NOT NULL CHECK (json_valid(value_json)),
+ updated_at TEXT NOT NULL
+);
+
+-- Payments (migrations/0011_payments.sql).
+CREATE TABLE IF NOT EXISTS payment_attempts (
+ order_number TEXT PRIMARY KEY,
+ order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+ amount TEXT NOT NULL,
+ currency TEXT NOT NULL,
+ status TEXT NOT NULL CHECK (status IN ('created', 'approved', 'rejected', 'review', 'error', 'expired', 'refunded')),
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json))
+);
+CREATE INDEX IF NOT EXISTS payment_attempts_order ON payment_attempts(order_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS payment_attempts_status ON payment_attempts(status, created_at);

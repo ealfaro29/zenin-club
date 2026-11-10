@@ -3,9 +3,14 @@ main = "worker.js"
 compatibility_date = "2026-10-21"
 account_id = "740fd37c6a7741c5b502263b1f31f508"
 workers_dev = true
+# Public API address on the store domain (zone zeninclub.shop must be active in this Cloudflare account).
+routes = [{ pattern = "api.zeninclub.shop", custom_domain = true }]
 
 [vars]
 ADMIN_USERNAME = "Admin"
+# Confirms Tilopay payments (credentials are set in Admin → Pagos) of customers who closed the tab and releases abandoned orders.
+[triggers]
+crons = ["*/10 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

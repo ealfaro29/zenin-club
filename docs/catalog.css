@@ -1,0 +1,82 @@
+/* Zenin Club — collections, dynamic garment backdrops, front/back prints and articles. */
+
+/* Design placement comes from each shirt type's print area. */
+.shirt-print>.shirt-design{left:var(--print-x,33%);top:var(--print-y,29.2%);width:var(--print-w,34%);height:var(--print-h,40%)}
+.shirt-art.is-article>.shirt-base{object-fit:contain}
+
+/* Backdrops follow the selected garment color (see stageColors in product-design.js). */
+.product-image,.detail-image,.quick-image,.detail-thumb,.search-result>div[style]{background:radial-gradient(ellipse at 50% 42%,var(--stage-glow,color-mix(in srgb,var(--stage,#3a3a40) 65%,white)),var(--stage,#3a3a40) 76%);transition:background .35s ease}
+.quick-image{position:relative;flex-direction:column}
+.quick-shirt{display:flex;justify-content:center;width:100%}
+.detail-thumb{border-radius:2px}
+
+.price-from{font-family:var(--body);font-size:.62em;font-weight:600;letter-spacing:.4px;text-transform:uppercase;opacity:.75;margin-right:2px}
+.base-price{font-weight:700;margin-left:6px;opacity:.85}
+.product-sides{position:absolute;left:10px;bottom:10px;z-index:3;font:700 9px/1 var(--body);letter-spacing:.6px;text-transform:uppercase;background:#0009;color:#fff;padding:6px 8px;border-radius:2px;backdrop-filter:blur(4px)}
+
+.side-toggle{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:4;display:flex;gap:2px;padding:3px;border-radius:40px;background:#000a;backdrop-filter:blur(6px)}
+.side-toggle button{border:0;border-radius:40px;background:transparent;color:#ddd;font:700 10px/1 var(--body);letter-spacing:.8px;text-transform:uppercase;padding:9px 15px;cursor:pointer}
+.side-toggle button[aria-pressed=true]{background:#f3f3f3;color:#111}
+.quick-image .side-toggle{bottom:10px}
+
+.detail-collection{display:inline-block;font:700 10px/1 var(--body);letter-spacing:1.4px;text-transform:uppercase;color:var(--red,#f04432);margin-bottom:10px}
+
+/* Navigation slots rendered from the collection list. */
+.nav-slot{display:contents}
+.desktop-nav .nav-slot>a{padding:0;color:inherit;font-size:15px;text-transform:uppercase;line-height:42px}
+.desktop-nav .nav-slot>a:hover{color:#f04343}
+.mobile-nav .nav-slot>a{font-family:var(--display);font-size:19px;display:flex;justify-content:space-between;gap:20px;padding:17px 0;border-bottom:1px solid #333;line-height:1.2}
+.footer-social[data-collection-footer]{display:flex;flex-wrap:wrap;gap:8px 18px}
+.footer-social[data-collection-footer]:empty{display:none}
+
+/* Home collection tiles. */
+.catalog-collections{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:4px;padding:4px 0;background:#101010}
+.collection-tile{position:relative;display:block;height:clamp(340px,40vw,540px);overflow:hidden;color:#fff;background:radial-gradient(ellipse at 50% 35%,color-mix(in srgb,var(--accent) 70%,white 10%),color-mix(in srgb,var(--accent) 55%,#0b0b0b) 80%)}
+.collection-tile>img{position:absolute;inset:7% 6% 24%;width:88%;height:69%;object-fit:contain;transition:transform .5s ease}
+.collection-tile:hover>img{transform:scale(1.04)}
+.collection-tile-copy{position:absolute;left:0;right:0;bottom:0;padding:22px 24px;display:flex;flex-direction:column;gap:8px;background:linear-gradient(transparent,#000c)}
+.collection-tile-copy strong{font:400 clamp(28px,3.4vw,44px)/1 var(--display);text-transform:uppercase}
+.collection-tile-copy span{font:700 10px/1 var(--body);letter-spacing:1.4px}
+
+/* Collection page hero. */
+.collection-hero{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);align-items:center;gap:20px;min-height:min(62vh,560px);padding:40px max(25px,5vw);color:#fff;background:radial-gradient(circle at 75% 45%,color-mix(in srgb,var(--accent) 80%,white 8%),color-mix(in srgb,var(--accent) 45%,#0c0c0c) 70%);overflow:hidden}
+.collection-hero-eyebrow{font:700 10px/1 var(--body);letter-spacing:2px;opacity:.8}
+.collection-hero h1{font:400 clamp(46px,7vw,104px)/.95 var(--display);text-transform:uppercase;margin:12px 0 16px}
+.collection-hero p{max-width:520px;font-size:14px;line-height:1.6;opacity:.9;white-space:pre-line}
+.collection-hero-count{display:block;margin-top:22px;font:700 10px/1 var(--body);letter-spacing:1.6px;opacity:.8}
+.collection-hero-art{display:flex;justify-content:center}
+.collection-hero-art img{width:100%;max-width:520px;max-height:480px;object-fit:contain;filter:drop-shadow(0 18px 30px #0006)}
+
+.shop-filters{display:flex;gap:6px;overflow-x:auto;padding:14px max(14px,2vw);background:#101010;border-bottom:1px solid #262626;scrollbar-width:none}
+.shop-filters button{flex:none;border:1px solid #3a3a3a;background:transparent;color:#ddd;border-radius:30px;padding:8px 15px;font:600 11px/1 var(--body);letter-spacing:.5px;text-transform:uppercase;cursor:pointer}
+.shop-filters button.active,.shop-filters button[aria-pressed=true]{background:#f3f3f3;border-color:#f3f3f3;color:#111}
+
+@media (max-width:760px){
+  .collection-hero{grid-template-columns:1fr;text-align:left;padding:30px 20px}
+  .collection-hero-art{order:-1}
+  .collection-hero-art img{max-height:300px}
+  .collection-tile{height:clamp(260px,80vw,420px)}
+  .collection-tile-copy{padding:14px}
+}
+
+/* Collection video reel. */
+.collection-reel{background:#0c0c0c;padding:4px 0}
+.collection-reel-track{display:flex;gap:4px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none}
+.collection-reel-track video{flex:none;height:min(72vh,620px);width:auto;max-width:100%;object-fit:cover;background:#151515;scroll-snap-align:start}
+.collection-reel-track.is-single{justify-content:center}
+.collection-reel-track.is-single video{width:100%;height:auto;max-height:78vh;object-fit:cover}
+.custom-campaign .hero-video{object-position:center}
+@media (max-width:760px){.collection-reel-track video{height:62vh}}
+
+/* Payments (Tilopay). */
+.checkout-secure{color:#9fe0b0!important}
+.checkout-redirect{text-align:center}
+.order-pay{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin:0 0 22px;padding:18px 22px;border:1px solid #3a3a3a;border-radius:6px;background:#1a1a1a;color:#f3f3f3}
+.order-pay strong{font:400 22px/1.15 var(--display);text-transform:uppercase}
+.order-pay p{margin:6px 0 0;font-size:13px;color:#c9c9c9;max-width:620px}
+.order-pay-paid{border-color:#2f6b3d;background:#16241a}
+.order-pay-failed,.order-pay-expired{border-color:#6b2f26;background:#26161a}
+.order-pay-pending,.order-pay-review{border-color:#6b5a2f;background:#242016}
+.order-pay-refunded{border-color:#2f4e6b;background:#161e26}
+.order-pay-error{color:#ffb09f!important}
+.order-pay-test{display:inline-block;margin-left:8px;font:700 9px/1 var(--body);letter-spacing:1px;background:#f1c84b;color:#111;border-radius:20px;padding:5px 8px;vertical-align:middle}
