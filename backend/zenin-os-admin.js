@@ -1,7 +1,7 @@
 // Admin-only social orders queue. Caller must authorize the session.
 const json = value => new Response(JSON.stringify(value), {headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 export async function listZcSocialOrders(env, url) {
-  const allowed = new Set(['new','preparing','ready','shipped','cancelled']);
+  const allowed = new Set(['new','preparing','ready','shipped','delivered','cancelled']);
   const status = url.searchParams.get('status');
   if (status && !allowed.has(status)) {
     const e = new Error('Invalid order status'); e.status=400; e.code='INVALID_STATUS'; throw e;
@@ -31,8 +31,9 @@ const transitionError = (code,message,status=409) => {const e=new Error(message)
 const allowedTransitions = {
   new: ['preparing','cancelled'],
   preparing: ['ready','cancelled'],
-  ready: ['shipped','cancelled'],
-  shipped: [],
+  ready: ['shipped','delivered','cancelled'],
+  shipped: ['delivered'],
+  delivered: [],
   cancelled: []
 };
 
@@ -47,6 +48,14 @@ export async function updateZcSocialOrderStatus(env, body, actor) {
   if (!allowedTransitions[row.status]?.includes(next))
     transitionError('INVALID_TRANSITION','Invalid order state transition');
   const order=JSON.parse(row.order_json);
+  if (next==='delivered') {
+    if (order.deliveryMode==='home_delivery' && row.status!=='shipped')
+      transitionError('INVALID_DELIVERY','Home delivery must be shipped before delivered');
+    if (order.deliveryMode==='workshop_pickup' && row.status!=='ready')
+      transitionError('INVALID_DELIVERY','Pickup must be ready before delivered');
+    if (order.deliveryMode==='workshop_pickup' && body?.balanceCollectedAtPickup!==true)
+      transitionError('BALANCE_CONFIRMATION_REQUIRED','Confirm collection of remaining balance at pickup');
+  }
   if (next==='shipped') {
     if (order.deliveryMode!=='home_delivery')
       transitionError('INVALID_DELIVERY','Workshop pickup cannot be marked shipped');
