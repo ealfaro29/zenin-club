@@ -1,3 +1,6 @@
+import { createZcRequest, createZcQuote, recordZcPaymentProof } from './zenin-os.js';
+import { acceptZcQuote, verifyZcManualPayment } from './zenin-os-orders.js';
+
 const COLORS = { 1: 'Washed Black', 2: 'Deep Teal', 3: 'Dusty Violet', 4: 'Faded Red' };
 const COLLECTIONS = { originals: 'Zenin Originals', food: 'Food Court', faces: 'Mood Swings', objects: 'Everyday Objects', cars: 'After Hours' };
 const SIZES = new Set(['S', 'M', 'L', 'XL', 'XXL']);
@@ -1782,6 +1785,24 @@ export default {
             const key = inventoryKey(productId, shirt, size);
             response = request.method === 'GET' ? json(await inventoryDetail(env, key)) : await updateInventory(request, env, key, session.sub);
           } else failure(405, 'METHOD_NOT_ALLOWED', 'Method is not supported.');
+        }
+        else if (path.startsWith('/admin/zc/')) {
+          const session = await authorize(request, env);
+          if (request.method !== 'POST') failure(405, 'METHOD_NOT_ALLOWED', 'Method is not supported.');
+          const body = await readJson(request);
+          try {
+            if (path === '/admin/zc/requests') response = await createZcRequest(env, body, session.sub);
+            else if (path === '/admin/zc/quotes') response = await createZcQuote(env, body, session.sub);
+            else if (path === '/admin/zc/quotes/accept') response = await acceptZcQuote(env, body, session.sub);
+            else if (path === '/admin/zc/payments/proofs') response = await recordZcPaymentProof(env, body, session.sub);
+            else if (path === '/admin/zc/payments/verify') response = await verifyZcManualPayment(env, body, session.sub);
+            else failure(404, 'NOT_FOUND', 'Endpoint was not found.');
+          } catch (error) {
+            if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+              failure(error.status, error.code || 'INVALID_ZC_REQUEST', error.message);
+            }
+            throw error;
+          }
         }
         else if (path === '/admin/orders' || /^\/admin\/orders\/[^/]+$/.test(path)) {
           await authorize(request, env);
