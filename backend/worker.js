@@ -1,5 +1,5 @@
 import { createZcRequest, createZcQuote, recordZcPaymentProof } from './zenin-os.js';
-import { acceptZcQuote, verifyZcManualPayment } from './zenin-os-orders.js';
+import { markZcQuoteSent, acceptZcQuote, verifyZcManualPayment } from './zenin-os-orders.js';
 
 const COLORS = { 1: 'Washed Black', 2: 'Deep Teal', 3: 'Dusty Violet', 4: 'Faded Red' };
 const COLLECTIONS = { originals: 'Zenin Originals', food: 'Food Court', faces: 'Mood Swings', objects: 'Everyday Objects', cars: 'After Hours' };
@@ -1793,6 +1793,7 @@ export default {
           try {
             if (path === '/admin/zc/requests') response = await createZcRequest(env, body, session.sub);
             else if (path === '/admin/zc/quotes') response = await createZcQuote(env, body, session.sub);
+            else if (path === '/admin/zc/quotes/sent') response = await markZcQuoteSent(env, body, session.sub);
             else if (path === '/admin/zc/quotes/accept') response = await acceptZcQuote(env, body, session.sub);
             else if (path === '/admin/zc/payments/proofs') response = await recordZcPaymentProof(env, body, session.sub);
             else if (path === '/admin/zc/payments/verify') response = await verifyZcManualPayment(env, body, session.sub);
