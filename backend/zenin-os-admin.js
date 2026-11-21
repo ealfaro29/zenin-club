@@ -67,8 +67,9 @@ export async function updateZcSocialOrderStatus(env, body, actor) {
   }
   const now=new Date().toISOString();
   const updated={...order,status:next,updatedAt:now,history:[...(order.history||[]),{status:next,at:now}]};
-  const statement=env.DB.prepare(`UPDATE zc_social_orders SET status=?,updated_at=?,order_json=?
-    WHERE id=? AND status=?`).bind(next,now,JSON.stringify(updated),orderId,row.status);
+  const statement=env.DB.prepare(`UPDATE zc_social_orders
+    SET status=?,updated_at=?,order_json=?,delivered_at=CASE WHEN ?='delivered' THEN ? ELSE delivered_at END
+    WHERE id=? AND status=?`).bind(next,now,JSON.stringify(updated),next,now,orderId,row.status);
   const event=env.DB.prepare(`INSERT INTO zc_events(id,request_id,quote_id,event_type,actor,payload_json,created_at)
     SELECT ?,?,?,?, ?, ?, ? WHERE EXISTS
     (SELECT 1 FROM zc_social_orders WHERE id=? AND status=? AND updated_at=?)`)
