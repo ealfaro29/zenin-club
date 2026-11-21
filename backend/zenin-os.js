@@ -64,9 +64,18 @@ export async function createZcQuote(env, body, actor) {
   if (discount > subtotal) invalid('Discount exceeds subtotal');
   const total = subtotal - discount + shipping;
   if (!Number.isSafeInteger(total)) invalid('Total too large');
-  // Quote deposit is always explicit: business policy determines what shipping is due upfront.
-  const deposit = money(body.depositRequiredMinor, 'depositRequiredMinor');
-  if (deposit > total) invalid('Deposit exceeds total');
+  // The 50% deposit covers merchandise only. Shipping is due with the
+  // remaining balance before dispatch; workshop pickup has no shipping fee.
+  const merchandiseTotal = subtotal - discount;
+  const deposit = Math.ceil(merchandiseTotal / 2);
+  if (body.depositRequiredMinor !== undefined && body.depositRequiredMinor !== deposit)
+    invalid('Deposit must equal 50% of discounted merchandise, excluding shipping');
+  if (body.deliveryMode !== undefined) {
+    if (!['workshop_pickup', 'home_delivery'].includes(body.deliveryMode)) invalid('Invalid delivery mode');
+    if (body.deliveryMode === 'workshop_pickup' && shipping !== 0) invalid('Workshop pickup must have free shipping');
+    if (body.deliveryMode === 'home_delivery' && currency === 'CRC' && shipping !== 250000)
+      invalid('Home delivery fee must be CRC 2500');
+  }
   const prior = await env.DB.prepare('SELECT COALESCE(MAX(revision),0) AS revision FROM zc_quotes WHERE request_id = ?').bind(requestId).first();
   const revision = Number(prior.revision) + 1;
   const quoteId = id('QUO'), timestamp = now();
