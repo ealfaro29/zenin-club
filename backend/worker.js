@@ -1,5 +1,6 @@
 import { createZcRequest, createZcQuote, recordZcPaymentProof } from './zenin-os.js';
 import { markZcQuoteSent, acceptZcQuote, verifyZcManualPayment } from './zenin-os-orders.js';
+import { convertZcQuoteToOrder } from './zenin-os-conversion.js';
 
 const COLORS = { 1: 'Washed Black', 2: 'Deep Teal', 3: 'Dusty Violet', 4: 'Faded Red' };
 const COLLECTIONS = { originals: 'Zenin Originals', food: 'Food Court', faces: 'Mood Swings', objects: 'Everyday Objects', cars: 'After Hours' };
@@ -1532,6 +1533,17 @@ async function trackOrder(request, env) {
     : constantEqual(suppliedEmail, row?.email_normalized || '');
   if (!row || !valid) failure(404, 'ORDER_NOT_FOUND', 'Order was not found with those details.');
   let order = JSON.parse(row.order_json);
+  // Social orders require the private tracking token, never email-only lookup.
+  // Return a strictly limited public projection; no customer or payment details.
+  if (order.source === 'social') {
+    if (!suppliedToken) failure(404, 'ORDER_NOT_FOUND', 'Order was not found with those details.');
+    return json({ order: {
+      id: order.id, status: order.status, createdAt: order.createdAt,
+      updatedAt: order.updatedAt, deliveryMode: order.deliveryMode,
+      history: (order.history || []).map(event => ({status:event.status,at:event.at})),
+      tracking: order.tracking?.number ? {carrier:order.tracking.carrier,number:order.tracking.number} : null
+    } });
+  }
   if (['pending', 'review'].includes(order.payment?.status) && await paymentSettings(env)) {
     try { await refreshPayment(env, row.id); } catch { /* Shown as pending; the cron confirms later. */ }
     order = JSON.parse((await env.DB.prepare('SELECT order_json FROM orders WHERE id = ?').bind(row.id).first()).order_json);
@@ -1797,6 +1809,7 @@ export default {
             else if (path === '/admin/zc/quotes/accept') response = await acceptZcQuote(env, body, session.sub);
             else if (path === '/admin/zc/payments/proofs') response = await recordZcPaymentProof(env, body, session.sub);
             else if (path === '/admin/zc/payments/verify') response = await verifyZcManualPayment(env, body, session.sub);
+            else if (path === '/admin/zc/orders/convert') response = await convertZcQuoteToOrder(env, body, session.sub);
             else failure(404, 'NOT_FOUND', 'Endpoint was not found.');
           } catch (error) {
             if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
