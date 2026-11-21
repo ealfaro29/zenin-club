@@ -45,3 +45,10 @@ Correos: preparar información para Sucursal Virtual, registrar manualmente la g
 
 ## Dirección del taller y momento de compartirla
 Cuando el cliente confirme su intención de realizar el pedido y elija `workshop_pickup`, preparar un mensaje con la dirección exacta del taller, aunque todavía no esté terminado el producto. No compartirla a quien solo consulta precios. La dirección exacta debe configurarse por el administrador; **no inventarla** ni deducirla de «Santa Bárbara de Heredia». Si falta en la configuración, marcar tarea para que el vendedor la proporcione manualmente. El adelanto SINPE del 50% se verifica antes de crear el pedido oficial. Cuando la producción esté lista, coordinar retiro y verificar el saldo antes de entregar.
+
+## Ubicación proporcionada por el vendedor (retiro en taller)
+- Localidad: **San Pedro de Santa Bárbara, Heredia, Costa Rica** (NO San Pedro de Barva).
+- Referencia: **a dos casas de Alcohólicos Anónimos, San Pedro de Santa Bárbara**.
+- Enlace facilitado: https://www.google.com/maps/search/Zenin%20Club/@10.028,-84.1718,17z?hl=es
+- Es un enlace de **búsqueda de Google Maps**, no un pin confirmado ni un enlace de Waze. No afirmar que dirige inequívocamente a la puerta del taller sin validarlo.
+- Compartir al confirmar intención de compra y modalidad retiro; no confundir con confirmación de pago. El número oficial sigue requiriendo adelanto verificado.
