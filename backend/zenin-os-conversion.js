@@ -15,7 +15,7 @@ const response = (data,status=200) => new Response(JSON.stringify(data),{status,
 export async function convertZcQuoteToOrder(env, body, actor) {
   const quoteId = typeof body?.quoteId === 'string' ? body.quoteId.trim() : '';
   if (!quoteId || quoteId.length > 100) fail(400,'INVALID_QUOTE','Valid quoteId required');
-  const existing = await env.DB.prepare('SELECT order_id FROM zc_order_links WHERE quote_id=?').bind(quoteId).first();
+  const existing = await env.DB.prepare('SELECT id AS order_id FROM zc_social_orders WHERE quote_id=?').bind(quoteId).first();
   if (existing) return response({orderId:existing.order_id,alreadyCreated:true});
   const q = await env.DB.prepare(`SELECT q.*,r.channel,r.customer_id,r.status AS request_status,
     c.name AS customer_name,c.phone AS customer_phone,c.email AS customer_email
@@ -51,27 +51,25 @@ export async function convertZcQuoteToOrder(env, body, actor) {
     history:[{status:'new',at:t}],notes:''};
   // Conditional INSERT guards against a payment being unverified between read and write.
   // The subsequent link and request transition share the same D1 transaction.
-  const insert=env.DB.prepare(`INSERT INTO orders(id,idempotency_hash,request_hash,tracking_hash,email_normalized,status,created_at,updated_at,order_json)
-    SELECT ?,?,?,?,?,?,?,?,?
+  const insert=env.DB.prepare(`INSERT INTO zc_social_orders(id,quote_id,request_id,status,tracking_hash,order_json,created_at,updated_at)
+    SELECT ?,?,?,'new',?,?,?,?
     WHERE (SELECT status FROM zc_quotes WHERE id=?)='accepted'
       AND (SELECT COALESCE(SUM(amount_minor),0) FROM zc_manual_payments WHERE quote_id=? AND status='verified' AND currency=?)>=?
-      AND NOT EXISTS(SELECT 1 FROM zc_order_links WHERE quote_id=?)`)
-    .bind(id,idem,idem,trackingHash,(q.customer_email||'').toLowerCase(),'new',t,t,JSON.stringify(order),
+      AND NOT EXISTS(SELECT 1 FROM zc_social_orders WHERE quote_id=?)`)
+    .bind(id,quoteId,q.request_id,trackingHash,JSON.stringify(order),t,t,
       quoteId,quoteId,q.currency,q.deposit_required_minor,quoteId);
   try {
     const results=await env.DB.batch([
       insert,
-      env.DB.prepare(`INSERT INTO zc_order_links(quote_id,order_id,created_at)
-        SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM orders WHERE id=?)`).bind(quoteId,id,t,id),
       env.DB.prepare(`UPDATE zc_requests SET status='converted',updated_at=?
-        WHERE id=? AND EXISTS(SELECT 1 FROM zc_order_links WHERE quote_id=? AND order_id=?)`).bind(t,q.request_id,quoteId,id),
+        WHERE id=? AND EXISTS(SELECT 1 FROM zc_social_orders WHERE quote_id=? AND id=?)`).bind(t,q.request_id,quoteId,id),
       env.DB.prepare(`INSERT INTO zc_events(id,request_id,quote_id,event_type,actor,created_at)
-        SELECT ?,?,?,'order.created',?,? WHERE EXISTS(SELECT 1 FROM zc_order_links WHERE quote_id=? AND order_id=?)`)
+        SELECT ?,?,?,'order.created',?,? WHERE EXISTS(SELECT 1 FROM zc_social_orders WHERE quote_id=? AND id=?)`)
         .bind('EVT-'+crypto.randomUUID(),q.request_id,quoteId,actor,t,quoteId,id),
     ]);
     if (results[0].meta?.changes !== 1) fail(409,'CONVERSION_CONFLICT','Conversion was not completed');
   } catch (error) {
-    const winner=await env.DB.prepare('SELECT order_id FROM zc_order_links WHERE quote_id=?').bind(quoteId).first();
+    const winner=await env.DB.prepare('SELECT id AS order_id FROM zc_social_orders WHERE quote_id=?').bind(quoteId).first();
     if (winner) return response({orderId:winner.order_id,alreadyCreated:true});
     throw error;
   }
