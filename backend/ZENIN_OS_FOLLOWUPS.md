@@ -1,15 +1,21 @@
-# Lead follow-up policy (WhatsApp, Facebook, Instagram)
+# Seguimiento único de clientes interesados — ZENIN CLUB OS
 
-- When a person asks about prices, sizes, designs or a quote, register a lead and its last inbound activity time.
-- If no customer reply or confirmed purchase occurs for **48 hours**, prepare a polite personalized follow-up (stage 1).
-- Optionally prepare a final follow-up after **72 hours**, if still appropriate. Limit to two total; do not reset the cadence indefinitely.
-- Cancel pending messages when the customer replies, opts out, or pays; suppress for completed orders.
-- First release: admin review queue with copy/send manually; no automatic outbound messages.
-- Later, use official Meta WhatsApp Business Platform after verifying consent and approved marketing templates for outbound messages outside the 24-hour service window. Respect opt-out and quiet hours; keep an audit trail.
-- Do not send without consent or claim to read WhatsApp conversations until the integration exists.
+## Política definitiva
+- **Un único mensaje de seguimiento a las 48 horas** desde la última interacción del cliente si consultó por un producto o recibió cotización y no respondió.
+- **No enviar un segundo recordatorio a las 72 horas** ni reprogramar intentos de recuperación para la misma consulta.
+- Si el cliente responde, compra, rechaza recibir mensajes o se cierra la consulta, cancelar el seguimiento.
+- No enviar mensajes a clientes sin consentimiento válido; respetar baja, horario apropiado y políticas de WhatsApp.
+- El seguimiento automático solo podrá activarse tras conectar oficialmente Meta WhatsApp Business Platform y contar con la plantilla aprobada correspondiente. Antes de ello, ninguna tarea debe enviar mensajes.
+- Duplicados: garantizar un máximo de un seguimiento por solicitud, incluso con reintentos o webhooks repetidos.
 
-Sample stage 1 (requires review):
-«¡Hola! 😊 Te escribimos de Zenin Club para saber si todavía te interesa la camiseta por la que nos consultaste. Si tenés dudas sobre tallas, diseños o cómo realizar el pedido, con gusto te ayudamos. ⚡»
+## Plantilla propuesta (sujeta a aprobación de Meta)
+¡Hola! 😊 ¿Cómo estás?
 
-## Decisión confirmada: modo automático
-El vendedor eligió **envío automático**, no aprobación individual, una vez que se configure la integración oficial de WhatsApp y Meta autorice las plantillas correspondientes. Mantener el envío deshabilitado por defecto hasta que estén verificados: conexión del número actual y elegibilidad de coexistencia, consentimiento documentado, plantilla de marketing aprobada y activa, controles de baja, horarios, deduplicación, presupuesto y webhook de respuestas. Seguimiento a las 48 horas y, como máximo, otro a las 72 horas desde la última interacción del cliente; cancelar al recibir respuesta, pago o baja. Si falta cualquier requisito, no enviar y mostrar motivo en panel. Los envíos automáticos no están activos hoy.
+Te saludamos de Zenin Club. Queríamos saber si todavía te interesa la camiseta por la que nos consultaste.
+
+Si tenés alguna pregunta sobre tallas, diseños o cómo realizar tu pedido, con mucho gusto te ayudamos.
+
+¡Que tengás un excelente día! ⚡
+
+## Implementación pendiente
+El esquema SQL existente permite stage 1 y 2; la siguiente migración elimina stage 2 de los registros futuros y cancela los ya programados. El motor de envíos aún no está implementado ni desplegado.
