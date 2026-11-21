@@ -10,3 +10,6 @@
 
 Sample stage 1 (requires review):
 «¡Hola! 😊 Te escribimos de Zenin Club para saber si todavía te interesa la camiseta por la que nos consultaste. Si tenés dudas sobre tallas, diseños o cómo realizar el pedido, con gusto te ayudamos. ⚡»
+
+## Decisión confirmada: modo automático
+El vendedor eligió **envío automático**, no aprobación individual, una vez que se configure la integración oficial de WhatsApp y Meta autorice las plantillas correspondientes. Mantener el envío deshabilitado por defecto hasta que estén verificados: conexión del número actual y elegibilidad de coexistencia, consentimiento documentado, plantilla de marketing aprobada y activa, controles de baja, horarios, deduplicación, presupuesto y webhook de respuestas. Seguimiento a las 48 horas y, como máximo, otro a las 72 horas desde la última interacción del cliente; cancelar al recibir respuesta, pago o baja. Si falta cualquier requisito, no enviar y mostrar motivo en panel. Los envíos automáticos no están activos hoy.
