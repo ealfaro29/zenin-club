@@ -7,6 +7,14 @@ const required = (v, name) => typeof v === 'string' && v.trim() ? v.trim() : fai
 const stamp = () => new Date().toISOString();
 const uid = p => p + '-' + crypto.randomUUID();
 
+export async function markZcQuoteSent(env, body, actor) {
+  const quoteId = required(body?.quoteId, 'quoteId'), t = stamp();
+  const result = await env.DB.prepare("UPDATE zc_quotes SET status='sent',updated_at=? WHERE id=? AND status='draft'").bind(t,quoteId).run();
+  if (result.meta?.changes !== 1) fail(409,'INVALID_QUOTE_STATE','Only draft quotes can be marked sent');
+  await env.DB.prepare("INSERT INTO zc_events(id,quote_id,event_type,actor,created_at) VALUES(?,?,'quote.sent',?,?)").bind(uid('EVT'),quoteId,actor,t).run();
+  return response({quoteId,status:'sent'});
+}
+
 export async function acceptZcQuote(env, body, actor) {
   const quoteId = required(body?.quoteId, 'quoteId'), t = stamp();
   const quote = await env.DB.prepare(`SELECT q.id,q.status,r.channel FROM zc_quotes q JOIN zc_requests r ON r.id=q.request_id WHERE q.id=?`).bind(quoteId).first();
