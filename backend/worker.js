@@ -1,6 +1,7 @@
 import { createZcRequest, createZcQuote, recordZcPaymentProof } from './zenin-os.js';
 import { markZcQuoteSent, acceptZcQuote, verifyZcManualPayment } from './zenin-os-orders.js';
 import { convertZcQuoteToOrder } from './zenin-os-conversion.js';
+import { listZcSocialOrders } from './zenin-os-admin.js';
 
 const COLORS = { 1: 'Washed Black', 2: 'Deep Teal', 3: 'Dusty Violet', 4: 'Faded Red' };
 const COLLECTIONS = { originals: 'Zenin Originals', food: 'Food Court', faces: 'Mood Swings', objects: 'Everyday Objects', cars: 'After Hours' };
@@ -1813,6 +1814,9 @@ export default {
         }
         else if (path.startsWith('/admin/zc/')) {
           const session = await authorize(request, env);
+          if (path === '/admin/zc/orders' && request.method === 'GET') {
+            response = await listZcSocialOrders(env, url);
+          } else {
           if (request.method !== 'POST') failure(405, 'METHOD_NOT_ALLOWED', 'Method is not supported.');
           const body = await readJson(request);
           try {
@@ -1829,6 +1833,7 @@ export default {
               failure(error.status, error.code || 'INVALID_ZC_REQUEST', error.message);
             }
             throw error;
+          }
           }
         }
         else if (path === '/admin/orders' || /^\/admin\/orders\/[^/]+$/.test(path)) {
