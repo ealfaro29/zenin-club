@@ -42,3 +42,6 @@ Enviar la plantilla 2 solo cuando el cliente elige envío a domicilio y falten d
 Fase 1: bandeja administrativa con mensajes preparados para revisión/copia y registro manual de respuestas. Fase 2: Meta WhatsApp Business Platform, únicamente tras confirmar elegibilidad de coexistencia con la app, consentimiento, plantillas y webhooks verificados. No existe aún acceso a conversaciones reales.
 
 Correos: preparar información para Sucursal Virtual, registrar manualmente la guía y seguimiento; no afirmar creación automática de guías ni utilizar scraping no autorizado. Las migraciones y handlers aún requieren integración y pruebas en D1 de desarrollo.
+
+## Dirección del taller y momento de compartirla
+Cuando el cliente confirme su intención de realizar el pedido y elija `workshop_pickup`, preparar un mensaje con la dirección exacta del taller, aunque todavía no esté terminado el producto. No compartirla a quien solo consulta precios. La dirección exacta debe configurarse por el administrador; **no inventarla** ni deducirla de «Santa Bárbara de Heredia». Si falta en la configuración, marcar tarea para que el vendedor la proporcione manualmente. El adelanto SINPE del 50% se verifica antes de crear el pedido oficial. Cuando la producción esté lista, coordinar retiro y verificar el saldo antes de entregar.
