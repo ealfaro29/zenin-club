@@ -1,43 +1,44 @@
 # ZENIN CLUB OS — WhatsApp y despachos (MVP prioritario)
 
-## Alcance
-La tienda web conserva Tilopay y cobra el 100%. Ventas atendidas por WhatsApp, Facebook o Instagram requieren un adelanto SINPE del 50% verificado por una persona. El número de pedido oficial se asigna **después** de verificar el pago correspondiente. No confundir comprobante recibido con pago confirmado.
+## Regla principal: usar los mensajes reales del vendedor
+El asistente no debe inventar una modalidad de retiro en sucursal de Correos. Para pedidos por WhatsApp, Facebook e Instagram en Costa Rica, ofrecer:
+1. Retiro en taller, Santa Bárbara de Heredia, sin costo adicional.
+2. Envío a domicilio, tarifa comunicada actualmente de ₡2.500, sujeta a cobertura y confirmación.
 
-## Captura de pedidos
-- Canal y referencia de conversación; nombre y teléfono del cliente.
-- Producto o diseño, talla, color, cantidad, personalización y notas.
-- Cotización aceptada, moneda, precio, adelanto requerido, estado de verificación.
-- Datos de envío: nombre completo, teléfono, país, provincia, cantón, distrito, dirección exacta, código postal cuando aplique y referencias.
-- Preguntar solamente por campos faltantes; ofrecer revisión y confirmación antes de guardar una dirección como confirmada.
-- No solicitar números de cuenta, credenciales ni datos de tarjetas por chat.
+**Plantilla 1 — modalidad**
+> Para la entrega manejamos dos modalidades:
+>
+> • Retiro en taller: En Santa Bárbara de Heredia (sin costo adicional).
+> • Envío a domicilio: Por ₡2.500 hasta la puerta de tu casa. 🚚
+>
+> ¿Te gustaría retirar o prefieres que te lo enviemos? ⚡
 
-## Estados operativos
-1. Solicitud incompleta: redactar pregunta específica sobre datos faltantes.
-2. Cotización pendiente: preparar resumen para aprobación del vendedor.
-3. Adelanto pendiente: solicitar comprobante; verificación bancaria humana.
-4. Pedido en producción: avisos según cambios reales de estado.
-5. Producción terminada: solicitar saldo restante.
-6. Saldo verificado + dirección confirmada: habilitar preparación de guía.
-7. Guía registrada: compartir número de tracking y enlace oficial verificado.
-8. Entrega: seguimiento cuando exista evidencia de entrega.
+**Plantilla 2 — datos para envío**
+> Para hacer el envío necesitamos la siguiente información
+>
+> Nombre completo
+> Número telefónico
+> Dirección exacta con cantón, ciudad y distrito
 
-## WhatsApp Business
-Primera fase: mensajes preparados para copiar y enviar manualmente, tareas de seguimiento y registro de respuestas por el operador. Segunda fase: conectar Meta WhatsApp Business Platform con coexistencia con la app solo si la cuenta/número son elegibles. Webhooks verificados, opt-in, control de duplicados, protección de datos, plantillas aprobadas para conversaciones fuera de la ventana de atención y posibilidad de intervención humana. Nunca inferir que ya hay acceso a conversaciones por tener GitHub conectado.
+Enviar la plantilla 2 solo cuando el cliente elige envío a domicilio y falten datos. Si ya facilitó datos, preguntar únicamente por los campos faltantes. Interpretar respuestas coloquiales (p. ej., «me lo envían», «paso a recoger») con posibilidad de confirmación humana ante ambigüedad. No marcar una dirección como completa hasta que el cliente la confirme.
 
-## Correos de Costa Rica
-MVP: recopilar y validar dirección, preparar datos para Sucursal Virtual, crear la guía manualmente en el portal autorizado, registrar el número y compartir el seguimiento. No afirmar que se generó una guía antes de contar con confirmación de Correos. No automatizar el portal por scraping. Evaluar API oficial o convenio empresarial en una etapa posterior.
+## Datos de entrega
+- `delivery_mode = workshop_pickup`: registrar nombre, teléfono, retiro en taller; no pedir dirección.
+- `delivery_mode = home_delivery`: registrar nombre, teléfono, provincia/cantón/distrito y dirección exacta con referencias si son necesarias.
+- La modalidad se selecciona explícitamente; `NULL` significa que aún no hay respuesta.
+- El campo `carrier` de envíos es interno, no una opción de entrega ofrecida al cliente.
+- Para pedidos internacionales de la web: cotizar envío por país y mantener Tilopay al 100%; no aplicar automáticamente tarifa de ₡2.500.
+- Validar cobertura y tarifa de Correos antes de emitir una guía.
 
-## Reglas de bloqueo
-- Sin pago inicial verificado, no existe pedido oficial ni orden de producción.
-- Sin saldo total verificado, no se habilita despacho.
-- Sin dirección confirmada, no se prepara guía.
-- No enviar mensajes sin revisión/consentimiento y conexión autorizada.
-- Evitar duplicados por identificador de mensaje y eventos idempotentes.
-- Conservar historial de cambios y restringir acceso a datos personales.
+## Reglas de pago y pedido
+- Web: Tilopay 100% confirmado antes de crear pedido oficial.
+- Ventas por chat: 50% SINPE verificado manualmente antes de crear pedido oficial.
+- Comprobante recibido no equivale a pago confirmado.
+- No despachar hasta confirmar el saldo total.
+- Retiro en taller no necesita guía de Correos.
+- Envío a domicilio: datos completos + saldo confirmado + producción lista antes de preparar la guía.
 
-## Implementación técnica
-- Migración 0012: clientes, solicitudes, cotizaciones y pagos manuales.
-- Migración 0013: perfiles de envío, envíos y tareas de mensajería.
-- Próximo código: rutas administrativas autenticadas para capturar respuestas, completar dirección y generar tareas; pruebas de autorización y validación de estados.
-- Después: panel de trabajo con bandejas «faltan datos», «pagos por verificar», «listos para guía» y «seguimiento pendiente».
-- Las migraciones están diseñadas para añadirse a D1, pero **no están aplicadas ni probadas**; ejecutar pruebas en una base de desarrollo antes de cualquier despliegue.
+## WhatsApp y Correos
+Fase 1: bandeja administrativa con mensajes preparados para revisión/copia y registro manual de respuestas. Fase 2: Meta WhatsApp Business Platform, únicamente tras confirmar elegibilidad de coexistencia con la app, consentimiento, plantillas y webhooks verificados. No existe aún acceso a conversaciones reales.
+
+Correos: preparar información para Sucursal Virtual, registrar manualmente la guía y seguimiento; no afirmar creación automática de guías ni utilizar scraping no autorizado. Las migraciones y handlers aún requieren integración y pruebas en D1 de desarrollo.
