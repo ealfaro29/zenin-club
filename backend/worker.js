@@ -2,6 +2,7 @@ import { createZcRequest, createZcQuote, recordZcPaymentProof } from './zenin-os
 import { markZcQuoteSent, acceptZcQuote, verifyZcManualPayment } from './zenin-os-orders.js';
 import { convertZcQuoteToOrder } from './zenin-os-conversion.js';
 import { listZcSocialOrders, updateZcSocialOrderStatus } from './zenin-os-admin.js';
+import { saveZcDelivery } from './zenin-os-delivery.js';
 
 const COLORS = { 1: 'Washed Black', 2: 'Deep Teal', 3: 'Dusty Violet', 4: 'Faded Red' };
 const COLLECTIONS = { originals: 'Zenin Originals', food: 'Food Court', faces: 'Mood Swings', objects: 'Everyday Objects', cars: 'After Hours' };
@@ -1828,6 +1829,7 @@ export default {
             else if (path === '/admin/zc/payments/verify') response = await verifyZcManualPayment(env, body, session.sub);
             else if (path === '/admin/zc/orders/convert') response = await convertZcQuoteToOrder(env, body, session.sub);
             else if (path === '/admin/zc/orders/status') response = await updateZcSocialOrderStatus(env, body, session.sub);
+            else if (path === '/admin/zc/delivery') response = await saveZcDelivery(env, body, session.sub);
             else failure(404, 'NOT_FOUND', 'Endpoint was not found.');
           } catch (error) {
             if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
