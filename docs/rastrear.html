@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rastreá tu pedido | Zenin Club</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#f6f4fa;background:#110d1d}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}
+main{width:min(100%,520px);padding:32px;border:1px solid #453455;border-radius:22px;background:#20162e}
+h1{margin:0 0 12px;font-size:1.8rem}p{color:#d4c8df;line-height:1.5}
+label{display:block;margin:18px 0 7px;font-weight:650}
+input,button{width:100%;padding:13px;border-radius:10px;font:inherit}
+input{background:#130f1d;color:#fff;border:1px solid #786b85}
+button{background:#a974ee;color:#140a20;border:0;margin-top:20px;font-weight:750;cursor:pointer}
+button:disabled{opacity:.55;cursor:wait}#result{margin-top:24px;padding:15px;border-radius:12px;background:#30223d}#result[hidden]{display:none}
+small{color:#b9aac8}a{color:#dfbbff}
+</style></head><body><main>
+<h1>📦 Rastreá tu pedido</h1>
+<p>Consultá el avance de tu compra con el número de pedido y el código privado que recibiste al confirmarla.</p>
+<form id="lookup">
+<label for="order">Número de pedido</label><input id="order" name="order" maxlength="80" autocomplete="off" required placeholder="Ej. ZC-000125">
+<label for="token">Código privado de seguimiento</label><input id="token" name="token" maxlength="128" autocomplete="off" required placeholder="Código de tu confirmación">
+<button id="submit" type="submit">Consultar estado</button></form>
+<section id="result" role="status" aria-live="polite" hidden></section>
+<p><small>Por tu seguridad, nunca compartás tu código de seguimiento públicamente.</small></p>
+</main>
+<script>
+const form=document.getElementById('lookup'), result=document.getElementById('result'), button=document.getElementById('submit');
+const api='https://api.zeninclub.shop/orders/track';
+const allowed={new:'Pedido registrado',preparing:'En producción',ready:'Listo para entrega',shipped:'Enviado',cancelled:'Cancelado'};
+form.addEventListener('submit',async event=>{
+ event.preventDefault();result.hidden=false;result.textContent='Consultando…';button.disabled=true;
+ try{
+  const res=await fetch(api,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:form.order.value.trim(),token:form.token.value.trim()}),cache:'no-store'});
+  if(!res.ok)throw new Error(res.status===404?'No encontramos un pedido con esos datos. Revisá el número y el código.':'No fue posible consultar el pedido. Intentá de nuevo.');
+  const data=await res.json(), order=data.order||{};
+  // Never inject server/customer values as HTML.
+  const status=allowed[order.status]||'Estado en revisión';
+  result.replaceChildren();
+  const title=document.createElement('strong');title.textContent='Estado: '+status;result.append(title);
+  const hint=document.createElement('p');hint.textContent='Si necesitás más información, escribinos por WhatsApp con tu número de pedido.';result.append(hint);
+ }catch(error){result.textContent=error.message||'No fue posible consultar el pedido.'}
+ finally{button.disabled=false}
+});
+</script></body></html>
