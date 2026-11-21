@@ -1527,6 +1527,19 @@ async function trackOrder(request, env) {
   const id = text(body.id, 'id', { max: 80 });
   const suppliedToken = body.token === undefined ? '' : text(body.token, 'token', { min: 1, max: 128 });
   const suppliedEmail = suppliedToken ? '' : email(body.email);
+  // Social orders are separate from legacy checkout to avoid inventory triggers.
+  const socialRow = await env.DB.prepare('SELECT * FROM zc_social_orders WHERE id = ?').bind(id).first();
+  if (socialRow) {
+    const matches = suppliedToken && constantEqual(await sha256(suppliedToken), socialRow.tracking_hash);
+    if (!matches) failure(404, 'ORDER_NOT_FOUND', 'Order was not found with those details.');
+    const social = JSON.parse(socialRow.order_json);
+    return json({order: {
+      id:social.id, status:socialRow.status, createdAt:socialRow.created_at,
+      updatedAt:socialRow.updated_at, deliveryMode:social.deliveryMode,
+      history:(social.history || []).map(event=>({status:event.status,at:event.at})),
+      tracking:social.tracking?.number ? {carrier:social.tracking.carrier,number:social.tracking.number} : null
+    }});
+  }
   const row = await env.DB.prepare('SELECT * FROM orders WHERE id = ?').bind(id).first();
   const valid = suppliedToken
     ? constantEqual(await sha256(suppliedToken), row?.tracking_hash || '0'.repeat(64))
