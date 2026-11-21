@@ -8,7 +8,7 @@ const tokenFor = async (env, id, key) => {
   const keyBytes = new TextEncoder().encode(env.ADMIN_SESSION_SECRET);
   const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, {name:'HMAC',hash:'SHA-256'},false,['sign']);
   const signature = new Uint8Array(await crypto.subtle.sign('HMAC',cryptoKey,new TextEncoder().encode(`zenin:order-tracking:v1:${id}:${key}`)));
-  return btoa(String.fromCharCode(...signature)).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/g,'');
+  return btoa(String.fromCharCode(...signature)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
 };
 const response = (data,status=200) => new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8'}});
 
