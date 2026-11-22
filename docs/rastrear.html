@@ -25,7 +25,7 @@ small{color:#b9aac8}a{color:#dfbbff}
 <script>
 const form=document.getElementById('lookup'), result=document.getElementById('result'), button=document.getElementById('submit');
 const api='https://api.zeninclub.shop/orders/track';
-const allowed={new:'Pedido registrado',preparing:'En producción',ready:'Listo para entrega',shipped:'Enviado',cancelled:'Cancelado'};
+const allowed={new:'Pedido registrado',preparing:'En producción',ready:'Listo para entrega',shipped:'Enviado',delivered:'Entregado',cancelled:'Cancelado'};
 form.addEventListener('submit',async event=>{
  event.preventDefault();result.hidden=false;result.textContent='Consultando…';button.disabled=true;
  try{
