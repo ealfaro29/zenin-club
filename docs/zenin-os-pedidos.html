@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Pedidos sociales | Zenin Club OS</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#f7f3fc;background:#120e1b}*{box-sizing:border-box}
+body{margin:0;padding:24px}main{max-width:1050px;margin:auto}h1{font-size:1.8rem}
+.panel{background:#21182e;border:1px solid #4b3b5d;border-radius:14px;padding:18px;margin:16px 0}
+input,select,button{font:inherit;padding:11px;border-radius:8px}input,select{color:#fff;background:#181222;border:1px solid #77648c}
+button{border:0;background:#b38af1;color:#140d20;font-weight:700;cursor:pointer}button:disabled{opacity:.5}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}.row>*{flex:1;min-width:150px}
+.order{border-top:1px solid #493955;padding:18px 0}.order:first-child{border-top:0}
+small,.muted{color:#c8b9d8}#message{min-height:1.5em}label{display:block;margin:10px 0 6px}
+</style></head><body><main>
+<h1>Zenin Club OS · Pedidos sociales</h1>
+<p class="muted">Panel de desarrollo. Requiere sesión administrativa. No envía WhatsApp ni crea guías de Correos.</p>
+<section class="panel">
+<label for="token">Token de sesión administrativa</label>
+<input id="token" type="password" autocomplete="off" placeholder="Pegá tu token temporal" style="width:100%">
+<p><small>El token solo se mantiene en esta pestaña mientras esté abierta. No se guarda en el navegador.</small></p>
+<div class="row"><select id="filter" aria-label="Filtrar estado">
+<option value="">Todos los pedidos</option><option value="new">Nuevos</option><option value="preparing">En producción</option>
+<option value="ready">Listos</option><option value="shipped">Enviados</option>
+<option value="delivered">Entregados</option><option value="cancelled">Cancelados</option>
+</select><button id="load">Actualizar pedidos</button></div>
+</section>
+<p id="message" role="status" aria-live="polite"></p>
+<section id="orders" class="panel" aria-label="Pedidos">Ingresá una sesión y seleccioná «Actualizar pedidos».</section>
+</main><script>
+'use strict';
+const api='https://api.zeninclub.shop';
+const $=id=>document.getElementById(id);
+const names={new:'Nuevo',preparing:'En producción',ready:'Listo',shipped:'Enviado',delivered:'Entregado',cancelled:'Cancelado'};
+const next={new:['preparing','cancelled'],preparing:['ready','cancelled'],ready:['shipped','delivered','cancelled'],shipped:['delivered']};
+function element(tag,txt){const node=document.createElement(tag);node.textContent=txt;return node}
+function money(v,c){return new Intl.NumberFormat('es-CR',{style:'currency',currency:c||'CRC'}).format(Number(v||0)/100)}
+async function request(path,method='GET',data){
+ const token=$('token').value.trim();if(!token)throw Error('Ingresá tu sesión administrativa.');
+ const response=await fetch(api+path,{method,headers:{Authorization:'Bearer '+token,...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined,cache:'no-store'});
+ const payload=await response.json().catch(()=>({}));
+ if(!response.ok)throw Error(payload.message||payload.error?.message||'Error HTTP '+response.status);
+ return payload;
+}
+function render(orders){
+ const root=$('orders');root.replaceChildren();
+ if(!orders.length){root.append(element('p','No hay pedidos para este filtro.'));return}
+ for(const order of orders){
+  const section=document.createElement('article');section.className='order';
+  section.append(element('h2',order.id),element('p','Estado: '+(names[order.status]||order.status)));
+  section.append(element('p','Cliente: '+(order.customer?.name||'Sin nombre')+' · '+(order.customer?.phone||'Sin teléfono')));
+  section.append(element('p','Modalidad: '+(order.deliveryMode==='workshop_pickup'?'Retiro en taller':'Envío a domicilio')));
+  section.append(element('p','Total: '+money(order.totals?.totalMinor,order.totals?.currency)));
+  const actions=(next[order.status]||[]).filter(s=>s!=='shipped'||order.deliveryMode==='home_delivery').filter(s=>s!=='delivered'||order.deliveryMode==='workshop_pickup'||order.status==='shipped');
+  const bar=document.createElement('div');bar.className='row';
+  for(const status of actions){
+   const btn=element('button',names[status]);btn.type='button';
+   btn.addEventListener('click',async()=>{
+    const pickup=status==='delivered'&&order.deliveryMode==='workshop_pickup';
+    const question=pickup?'¿Confirmás que recibiste el saldo restante al entregar el pedido?':'¿Confirmás cambiar '+order.id+' a '+names[status]+'?';
+    if(!confirm(question))return;
+    btn.disabled=true;
+    try{await request('/admin/zc/orders/status','POST',{orderId:order.id,status,...(pickup?{balanceCollectedAtPickup:true}:{})});await load()}
+    catch(e){$('message').textContent=e.message;btn.disabled=false}
+   });bar.append(btn);
+  }
+  section.append(bar);root.append(section);
+ }
+}
+async function load(){
+ $('message').textContent='Consultando pedidos…';$('load').disabled=true;
+ try{const filter=$('filter').value;const result=await request('/admin/zc/orders?limit=100'+(filter?'&status='+encodeURIComponent(filter):''));render(result.orders||[]);$('message').textContent='Pedidos cargados.'}
+ catch(e){$('message').textContent=e.message}
+ finally{$('load').disabled=false}
+}
+$('load').addEventListener('click',load);
+</script></body></html>
