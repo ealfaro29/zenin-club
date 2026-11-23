@@ -53,8 +53,15 @@ export async function updateZcSocialOrderStatus(env, body, actor) {
       transitionError('INVALID_DELIVERY','Home delivery must be shipped before delivered');
     if (order.deliveryMode==='workshop_pickup' && row.status!=='ready')
       transitionError('INVALID_DELIVERY','Pickup must be ready before delivered');
-    if (order.deliveryMode==='workshop_pickup' && body?.balanceCollectedAtPickup!==true)
-      transitionError('BALANCE_CONFIRMATION_REQUIRED','Confirm collection of remaining balance at pickup');
+    if (order.deliveryMode==='workshop_pickup') {
+      const paid=await env.DB.prepare(`SELECT COALESCE(SUM(amount_minor),0) AS amount
+        FROM zc_manual_payments WHERE quote_id=? AND status='verified' AND currency=?`)
+        .bind(row.quote_id,order.totals.currency).first();
+      const outstanding=Math.max(0,Number(order.totals.totalMinor)-Number(paid.amount));
+      if (outstanding>0 && (body?.balanceCollectedAtPickup!==true ||
+          !Number.isSafeInteger(body?.collectedAtPickupMinor) || body.collectedAtPickupMinor!==outstanding))
+        transitionError('BALANCE_CONFIRMATION_REQUIRED','Confirm exact outstanding amount collected at pickup');
+    }
   }
   if (next==='shipped') {
     if (order.deliveryMode!=='home_delivery')
@@ -74,7 +81,7 @@ export async function updateZcSocialOrderStatus(env, body, actor) {
     SELECT ?,?,?,?, ?, ?, ? WHERE EXISTS
     (SELECT 1 FROM zc_social_orders WHERE id=? AND status=? AND updated_at=?)`)
     .bind('EVT-'+crypto.randomUUID(),row.request_id,row.quote_id,'order.status_changed',actor,
-      JSON.stringify({orderId,from:row.status,to:next}),now,orderId,next,now);
+      JSON.stringify({orderId,from:row.status,to:next,...(next==='delivered'&&order.deliveryMode==='workshop_pickup'?{pickupBalanceCollectedMinor:body.collectedAtPickupMinor||0}:{})}),now,orderId,next,now);
   const result=await env.DB.batch([statement,event]);
   if(result[0].meta?.changes!==1)
     transitionError('ORDER_CHANGED','Order changed. Refresh and retry');
