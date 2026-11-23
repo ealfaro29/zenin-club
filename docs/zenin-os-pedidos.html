@@ -55,10 +55,21 @@ function render(orders){
    const btn=element('button',names[status]);btn.type='button';
    btn.addEventListener('click',async()=>{
     const pickup=status==='delivered'&&order.deliveryMode==='workshop_pickup';
+    const outstanding=Math.max(0,Number(order.totals?.totalMinor||0)-Number(order.totals?.verifiedPaidMinor||0));
+    let collectedAtPickupMinor=0;
+    if(pickup&&outstanding>0){
+      const input=prompt('Confirmá el saldo cobrado al retirar (en colones, sin símbolo):',String(outstanding/100));
+      if(input===null)return;
+      const parsed=Number(input.trim().replace(',','.'));
+      if(!Number.isFinite(parsed)||!Number.isSafeInteger(Math.round(parsed*100))||Math.round(parsed*100)!==outstanding){
+        $('message').textContent='El monto ingresado debe coincidir con el saldo pendiente.';return;
+      }
+      collectedAtPickupMinor=outstanding;
+    }
     const question=pickup?'¿Confirmás que recibiste el saldo restante al entregar el pedido?':'¿Confirmás cambiar '+order.id+' a '+names[status]+'?';
     if(!confirm(question))return;
     btn.disabled=true;
-    try{await request('/admin/zc/orders/status','POST',{orderId:order.id,status,...(pickup?{balanceCollectedAtPickup:true}:{})});await load()}
+    try{await request('/admin/zc/orders/status','POST',{orderId:order.id,status,...(pickup?{balanceCollectedAtPickup:true,collectedAtPickupMinor}:{})});await load()}
     catch(e){$('message').textContent=e.message;btn.disabled=false}
    });bar.append(btn);
   }
