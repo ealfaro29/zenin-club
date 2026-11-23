@@ -14,9 +14,12 @@ small,.muted{color:#c8b9d8}#message{min-height:1.5em}label{display:block;margin:
 <h1>Zenin Club OS · Pedidos sociales</h1>
 <p class="muted">Panel de desarrollo. Requiere sesión administrativa. No envía WhatsApp ni crea guías de Correos.</p>
 <section class="panel">
-<label for="token">Token de sesión administrativa</label>
-<input id="token" type="password" autocomplete="off" placeholder="Pegá tu token temporal" style="width:100%">
-<p><small>El token solo se mantiene en esta pestaña mientras esté abierta. No se guarda en el navegador.</small></p>
+<label for="test-api">API</label>
+<select id="test-api"><option value="">Seleccioná un entorno</option><option value="local">Pruebas locales</option></select>
+<label for="test-password">Clave temporal de pruebas</label>
+<input id="test-password" type="password" autocomplete="off">
+<button id="test-login" type="button">Iniciar sesión local</button>
+<p id="test-api-status" role="status"></p>
 <div class="row"><select id="filter" aria-label="Filtrar estado">
 <option value="">Todos los pedidos</option><option value="new">Nuevos</option><option value="preparing">En producción</option>
 <option value="ready">Listos</option><option value="shipped">Enviados</option>
@@ -25,17 +28,15 @@ small,.muted{color:#c8b9d8}#message{min-height:1.5em}label{display:block;margin:
 </section>
 <p id="message" role="status" aria-live="polite"></p>
 <section id="orders" class="panel" aria-label="Pedidos">Ingresá una sesión y seleccioná «Actualizar pedidos».</section>
-</main><script>
+</main><script src="zenin-os-test-api.js"></script><script>
 'use strict';
-const api='https://api.zeninclub.shop';
 const $=id=>document.getElementById(id);
 const names={new:'Nuevo',preparing:'En producción',ready:'Listo',shipped:'Enviado',delivered:'Entregado',cancelled:'Cancelado'};
 const next={new:['preparing','cancelled'],preparing:['ready','cancelled'],ready:['shipped','delivered','cancelled'],shipped:['delivered']};
 function element(tag,txt){const node=document.createElement(tag);node.textContent=txt;return node}
 function money(v,c){return new Intl.NumberFormat('es-CR',{style:'currency',currency:c||'CRC'}).format(Number(v||0)/100)}
 async function request(path,method='GET',data){
- const token=$('token').value.trim();if(!token)throw Error('Ingresá tu sesión administrativa.');
- const response=await fetch(api+path,{method,headers:{Authorization:'Bearer '+token,...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined,cache:'no-store'});
+ const response=await zeninAdminRequest(path,{method,headers:{...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined,cache:'no-store'});
  const payload=await response.json().catch(()=>({}));
  if(!response.ok)throw Error(payload.message||payload.error?.message||'Error HTTP '+response.status);
  return payload;

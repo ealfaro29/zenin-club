@@ -132,4 +132,12 @@ JSON bodies require `application/json` and are limited to 32 KiB. Public order r
 
 ## Validation
 
+### Private ZENIN CLUB OS sandbox
+
+With Node 24, run `npm run dev:zenin-os` from the repository root. Open the Ventas or Pedidos URL printed in the terminal, select **Pruebas locales**, and enter the temporary password. Sign in on each page you open. Both pages require the local server on `127.0.0.1:5183`.
+
+Each launch creates an empty SQLite database in a private temporary directory and applies migrations 0012 through 0018. Use fictional names, addresses, and simulated payment references. Stop the server with Ctrl+C. Start it again for a fresh database and password. The previous database path is printed for inspection or cleanup.
+
+The server invokes the Worker with local bindings and only exposes the two panels, login, ZENIN CLUB OS endpoints and tracking. No Cloudflare credentials or deployment are required.
+
 `npm run check` verifies JavaScript syntax. `npm test` exercises real Worker handlers against a SQLite-backed D1 adapter and an in-memory R2 adapter. Coverage includes PNG validation/auth/cache, base CRUD/global IDs/custom sizes, archived-base races, product creation and stock behavior, order snapshots, migrations with historical rows and foreign-key checks, idempotency, stale writes, tracking privacy, CORS and limits. Node 22+ is required.

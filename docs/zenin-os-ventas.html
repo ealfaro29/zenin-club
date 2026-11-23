@@ -13,8 +13,12 @@ button:disabled{opacity:.5}small,p{line-height:1.5;color:#d5c7e2}.grid{display:g
 </style></head><body><main>
 <h1>Zenin Club OS · Cotizaciones y pagos</h1>
 <p>Panel de desarrollo para registrar solicitudes, preparar cotizaciones y revisar SINPE. No crea pedidos automáticamente al recibir un comprobante.</p>
-<section><label for="token">Sesión administrativa temporal</label><input id="token" type="password" autocomplete="off" placeholder="Token de administrador">
-<p><small>No se almacena el token en el navegador. Usá una sesión autorizada.</small></p>
+<section><label for="test-api">API</label>
+<select id="test-api"><option value="">Seleccioná un entorno</option><option value="local">Pruebas locales</option></select>
+<label for="test-password">Clave temporal de pruebas</label>
+<input id="test-password" type="password" autocomplete="off">
+<button id="test-login" type="button">Iniciar sesión local</button>
+<p id="test-api-status" role="status"></p>
 <a href="zenin-os-pedidos.html">Ir al panel de pedidos</a></section>
 <section><h2>1. Nueva solicitud</h2><form id="requestForm">
 <div class="grid"><div><label>Nombre</label><input name="name" required maxlength="160"></div><div><label>WhatsApp / teléfono</label><input name="phone" required maxlength="60"></div></div>
@@ -55,16 +59,15 @@ button:disabled{opacity:.5}small,p{line-height:1.5;color:#d5c7e2}.grid{display:g
 <button>Convertir a pedido</button></form>
 <p><small>Antes de convertir, debe estar registrada y confirmada la modalidad de entrega. El número de pedido se asigna únicamente después de verificar el adelanto.</small></p></section>
 <section><h2>Resultado</h2><pre id="output" role="status" aria-live="polite">Esperando una operación…</pre></section>
-</main><script>
+</main><script src="zenin-os-test-api.js"></script><script>
 'use strict';
-const api='https://api.zeninclub.shop',out=document.getElementById('output');
+const out=document.getElementById('output');
 const formData=f=>Object.fromEntries(new FormData(f).entries());
 const minor=value=>{const n=Number(value);if(!Number.isSafeInteger(n)||n<0||!Number.isSafeInteger(n*100))throw Error('Ingresá un monto válido en colones enteros.');return n*100};
 async function call(path,body,button){
- const token=document.getElementById('token').value.trim();if(!token)throw Error('Ingresá tu sesión administrativa.');
  button.disabled=true;out.textContent='Procesando…';
  try{
- const r=await fetch(api+path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body),cache:'no-store'});
+ const r=await zeninAdminRequest(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store'});
  const data=await r.json().catch(()=>({}));
  if(!r.ok)throw Error(data.error?.message||data.message||'Error HTTP '+r.status);
  out.textContent=JSON.stringify(data,null,2);return data;

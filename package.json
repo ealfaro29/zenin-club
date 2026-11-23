@@ -13,7 +13,8 @@
     "db:empty-catalog": "wrangler d1 execute zenin-club-orders --remote --file=backend/migrations/0009_empty_catalog.sql --config=backend/wrangler.toml",
     "db:migrate:media": "wrangler d1 execute zenin-club-orders --remote --file=backend/migrations/0010_media.sql --config=backend/wrangler.toml",
     "db:migrate:payments": "wrangler d1 execute zenin-club-orders --remote --file=backend/migrations/0011_payments.sql --config=backend/wrangler.toml",
-    "test:zenin-os": "node --test backend/zenin-os-tests.mjs"
+    "test:zenin-os": "node --test backend/zenin-os-tests.mjs",
+    "dev:zenin-os": "node backend/zenin-os-local.mjs"
   },
   "devDependencies": {
     "wrangler": "4.151.3"
