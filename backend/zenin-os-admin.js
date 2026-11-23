@@ -18,13 +18,19 @@ export async function listZcSocialOrders(env, url) {
        FROM zc_social_orders s JOIN zc_requests r ON r.id=s.request_id
        JOIN zc_customers c ON c.id=r.customer_id
        ORDER BY s.created_at DESC,s.id DESC LIMIT ?`).bind(limit)).all();
-  return json({orders:(rows.results||[]).map(row=>{
+  const orders=await Promise.all((rows.results||[]).map(async row=>{
     const data=JSON.parse(row.order_json);
+    const verified=await env.DB.prepare(`SELECT COALESCE(SUM(amount_minor),0) AS amount
+      FROM zc_manual_payments WHERE quote_id=? AND status='verified' AND currency=?`)
+      .bind(row.quote_id,data.totals.currency).first();
+    const paid=Number(verified?.amount||0);
     return {id:row.id,quoteId:row.quote_id,requestId:row.request_id,
       status:row.status,createdAt:row.created_at,updatedAt:row.updated_at,
       channel:row.channel,customer:{name:row.customer_name,phone:row.customer_phone},
-      deliveryMode:data.deliveryMode,totals:data.totals};
-  }),limit});
+      deliveryMode:data.deliveryMode,
+      totals:{...data.totals,verifiedPaidMinor:paid,remainingMinor:Math.max(0,data.totals.totalMinor-paid)}};
+  }));
+  return json({orders,limit});
 }
 
 const transitionError = (code,message,status=409) => {const e=new Error(message);e.status=status;e.code=code;throw e;};
