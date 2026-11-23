@@ -208,6 +208,17 @@ test('idempotent checkout retries persist one order and do not store the plainte
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM orders').first('n'), 2);
 });
 
+test('legacy tracking survives absent social-orders table without hiding other database failures', async t => {
+  const env = environment(); t.after(() => env.DB.close());
+  const created = await request(env, '/orders', { method: 'POST', body: checkout() });
+  assert.equal(created.status, 201);
+  const track = await request(env, '/orders/track', {method:'POST',body:{id:created.data.order.id,token:created.data.trackingToken}});
+  assert.equal(track.status, 200);
+  assert.equal(track.data.order.id, created.data.order.id);
+  const missing = await request(env, '/orders/track', {method:'POST',body:{id:'ZC-nonexistent',token:'not-a-real-token'}});
+  assert.equal(missing.status, 404);
+});
+
 test('admin authentication is mandatory and authenticated updates remain private on tracking', async t => {
   const env = environment(); t.after(() => env.DB.close());
   const creation = await request(env, '/orders', { method: 'POST', body: checkout() });
