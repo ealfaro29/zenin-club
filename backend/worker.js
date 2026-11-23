@@ -1530,7 +1530,16 @@ async function trackOrder(request, env) {
   const suppliedToken = body.token === undefined ? '' : text(body.token, 'token', { min: 1, max: 128 });
   const suppliedEmail = suppliedToken ? '' : email(body.email);
   // Social orders are separate from legacy checkout to avoid inventory triggers.
-  const socialRow = await env.DB.prepare('SELECT * FROM zc_social_orders WHERE id = ?').bind(id).first();
+  // Legacy storefront tracking must work before ZENIN OS migrations are applied.
+  // Ignore only the specifically missing social-orders table, not other DB failures.
+  let socialRow = null;
+  try {
+    socialRow = await env.DB.prepare('SELECT * FROM zc_social_orders WHERE id = ?').bind(id).first();
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (!/no such table:\s*(?:main\.)?["'`]?zc_social_orders["'`]?\b/i.test(message))
+      throw error;
+  }
   if (socialRow) {
     const matches = suppliedToken && constantEqual(await sha256(suppliedToken), socialRow.tracking_hash);
     if (!matches) failure(404, 'ORDER_NOT_FOUND', 'Order was not found with those details.');
