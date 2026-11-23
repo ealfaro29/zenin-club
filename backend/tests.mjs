@@ -217,6 +217,27 @@ test('legacy tracking survives absent social-orders table without hiding other d
   assert.equal(track.data.order.id, created.data.order.id);
   const missing = await request(env, '/orders/track', {method:'POST',body:{id:'ZC-nonexistent',token:'not-a-real-token'}});
   assert.equal(missing.status, 404);
+
+  const prepare = env.DB.prepare.bind(env.DB);
+  let socialTable = 'zc_social_orders';
+  env.DB.prepare = sql => {
+    if (!sql.includes('FROM zc_social_orders')) return prepare(sql);
+    return { bind: (...params) => ({
+      async first() {
+        try {
+          return await prepare(sql.replace('zc_social_orders', socialTable)).bind(...params).first();
+        } catch (cause) {
+          throw new Error('D1_ERROR', { cause });
+        }
+      }
+    }) };
+  };
+  const trackExisting = () => request(env, '/orders/track', {
+    method: 'POST', body: { id: created.data.order.id, token: created.data.trackingToken }
+  });
+  assert.equal((await trackExisting()).status, 200);
+  socialTable = 'zc_social_orders_archive';
+  assert.equal((await trackExisting()).status, 500);
 });
 
 test('admin authentication is mandatory and authenticated updates remain private on tracking', async t => {

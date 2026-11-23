@@ -1536,8 +1536,7 @@ async function trackOrder(request, env) {
   try {
     socialRow = await env.DB.prepare('SELECT * FROM zc_social_orders WHERE id = ?').bind(id).first();
   } catch (error) {
-    const message = String(error?.message || '');
-    if (!/no such table:\s*(?:main\.)?["'`]?zc_social_orders["'`]?\b/i.test(message))
+    if (!/no such table:\s*(?:main\.)?["'`]?zc_social_orders["'`]?(?=\s|:|$)/i.test(sqlMessage(error)))
       throw error;
   }
   if (socialRow) {
