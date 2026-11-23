@@ -49,6 +49,8 @@ function render(orders){
   section.append(element('p','Cliente: '+(order.customer?.name||'Sin nombre')+' · '+(order.customer?.phone||'Sin teléfono')));
   section.append(element('p','Modalidad: '+(order.deliveryMode==='workshop_pickup'?'Retiro en taller':'Envío a domicilio')));
   section.append(element('p','Total: '+money(order.totals?.totalMinor,order.totals?.currency)));
+  section.append(element('p','Pagos verificados: '+money(order.totals?.verifiedPaidMinor,order.totals?.currency)));
+  section.append(element('p','Saldo pendiente: '+money(order.totals?.remainingMinor,order.totals?.currency)));
   const actions=(next[order.status]||[]).filter(s=>s!=='shipped'||order.deliveryMode==='home_delivery').filter(s=>s!=='delivered'||order.deliveryMode==='workshop_pickup'||order.status==='shipped');
   const bar=document.createElement('div');bar.className='row';
   for(const status of actions){
