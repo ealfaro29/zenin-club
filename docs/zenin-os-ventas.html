@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Cotizaciones y SINPE | Zenin Club OS</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#f6f2fc;background:#130e1d}*{box-sizing:border-box}body{margin:0;padding:24px}
+main{max-width:900px;margin:auto}section{padding:20px;border:1px solid #4c3a61;background:#241932;border-radius:14px;margin:16px 0}
+h1{font-size:1.8rem}h2{font-size:1.15rem}label{display:block;margin:12px 0 5px}
+input,select,textarea,button{font:inherit;padding:11px;border-radius:8px;max-width:100%}
+input,select,textarea{width:100%;background:#161021;color:white;border:1px solid #806a94}
+button{background:#b58af2;border:0;color:#1a1025;font-weight:700;cursor:pointer;margin-top:12px}
+button:disabled{opacity:.5}small,p{line-height:1.5;color:#d5c7e2}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+#output{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#dcb9ff}
+</style></head><body><main>
+<h1>Zenin Club OS · Cotizaciones y pagos</h1>
+<p>Panel de desarrollo para registrar solicitudes, preparar cotizaciones y revisar SINPE. No crea pedidos automáticamente al recibir un comprobante.</p>
+<section><label for="token">Sesión administrativa temporal</label><input id="token" type="password" autocomplete="off" placeholder="Token de administrador">
+<p><small>No se almacena el token en el navegador. Usá una sesión autorizada.</small></p>
+<a href="zenin-os-pedidos.html">Ir al panel de pedidos</a></section>
+<section><h2>1. Nueva solicitud</h2><form id="requestForm">
+<div class="grid"><div><label>Nombre</label><input name="name" required maxlength="160"></div><div><label>WhatsApp / teléfono</label><input name="phone" required maxlength="60"></div></div>
+<label>Canal</label><select name="channel"><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option><option value="facebook">Facebook</option><option value="other">Otro</option></select>
+<label>Detalle solicitado</label><textarea name="description" maxlength="3000"></textarea>
+<button>Registrar solicitud</button></form></section>
+<section><h2>2. Cotización</h2><form id="quoteForm">
+<label>ID de solicitud</label><input name="requestId" id="requestId" required>
+<div class="grid"><div><label>Producto o diseño</label><input name="description" required></div><div><label>Cantidad</label><input name="quantity" type="number" min="1" step="1" value="1" required></div></div>
+<div class="grid"><div><label>Precio unitario (₡)</label><input name="price" type="number" min="0" step="1" required></div><div><label>Descuento (₡)</label><input name="discount" type="number" min="0" step="1" value="0" required></div></div>
+<label>Modalidad</label><select name="deliveryMode"><option value="workshop_pickup">Retiro en taller (gratis)</option><option value="home_delivery">Envío a domicilio (₡2.500)</option></select>
+<button>Crear cotización</button></form>
+<p><small>El adelanto se calcula automáticamente como el 50% del precio de los productos después del descuento. El envío no se incluye en el adelanto.</small></p></section>
+<section><h2>3. Enviar y aceptar cotización</h2><form id="quoteStatusForm">
+<label>ID de cotización</label><input id="quoteId" name="quoteId" required>
+<div class="grid"><button type="button" id="sent">Marcar como enviada</button><button type="button" id="accepted">Marcar como aceptada</button></div>
+</form></section>
+<section><h2>4. Registrar comprobante SINPE</h2><form id="proofForm">
+<label>ID de cotización</label><input name="quoteId" required>
+<div class="grid"><div><label>Tipo de pago</label><select name="kind"><option value="deposit">Adelanto</option><option value="balance">Saldo</option></select></div><div><label>Monto (₡)</label><input name="amount" type="number" min="1" step="1" required></div></div>
+<label>Referencia bancaria (si está disponible)</label><input name="bankReference" maxlength="120">
+<button>Registrar para revisión</button></form></section>
+<section><h2>5. Verificar ingreso bancario</h2><form id="verifyForm">
+<label>ID de pago</label><input name="paymentId" id="paymentId" required>
+<label>Referencia bancaria real</label><input name="bankReference" required maxlength="120">
+<label><input name="confirmed" type="checkbox" required style="width:auto"> Verifiqué personalmente que el dinero ingresó a la cuenta bancaria, no solamente el comprobante.</label>
+<button>Confirmar pago verificado</button></form></section>
+<section><h2>6. Crear pedido oficial</h2><form id="convertForm">
+<label>ID de cotización aceptada y con adelanto verificado</label><input name="quoteId" required>
+<button>Convertir a pedido</button></form>
+<p><small>Antes de convertir, debe estar registrada y confirmada la modalidad de entrega. El número de pedido se asigna únicamente después de verificar el adelanto.</small></p></section>
+<section><h2>Resultado</h2><pre id="output" role="status" aria-live="polite">Esperando una operación…</pre></section>
+</main><script>
+'use strict';
+const api='https://api.zeninclub.shop',out=document.getElementById('output');
+const formData=f=>Object.fromEntries(new FormData(f).entries());
+const minor=value=>{const n=Number(value);if(!Number.isSafeInteger(n)||n<0||!Number.isSafeInteger(n*100))throw Error('Ingresá un monto válido en colones enteros.');return n*100};
+async function call(path,body,button){
+ const token=document.getElementById('token').value.trim();if(!token)throw Error('Ingresá tu sesión administrativa.');
+ button.disabled=true;out.textContent='Procesando…';
+ try{
+ const r=await fetch(api+path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body),cache:'no-store'});
+ const data=await r.json().catch(()=>({}));
+ if(!r.ok)throw Error(data.error?.message||data.message||'Error HTTP '+r.status);
+ out.textContent=JSON.stringify(data,null,2);return data;
+ }finally{button.disabled=false}
+}
+function wire(id,path,make,after){
+ const f=document.getElementById(id);f.addEventListener('submit',async e=>{e.preventDefault();
+ try{const data=await call(path,make(formData(f)),f.querySelector('button[type=submit],button:not([type])'));after?.(data)}
+ catch(err){out.textContent=err.message}});
+}
+wire('requestForm','/admin/zc/requests',d=>({channel:d.channel,customer:{name:d.name,phone:d.phone},description:d.description}),d=>{document.getElementById('requestId').value=d.request?.id||''});
+wire('quoteForm','/admin/zc/quotes',d=>({requestId:d.requestId,currency:'CRC',items:[{description:d.description,quantity:Number(d.quantity),unitPriceMinor:minor(d.price)}],discountMinor:minor(d.discount),shippingMinor:d.deliveryMode==='home_delivery'?250000:0,deliveryMode:d.deliveryMode}),d=>{document.getElementById('quoteId').value=d.quote?.id||''});
+for(const [id,path] of [['sent','/admin/zc/quotes/sent'],['accepted','/admin/zc/quotes/accept']]){
+ document.getElementById(id).addEventListener('click',async e=>{try{await call(path,{quoteId:document.getElementById('quoteId').value.trim()},e.currentTarget)}catch(err){out.textContent=err.message}});
+}
+wire('proofForm','/admin/zc/payments/proofs',d=>({quoteId:d.quoteId,kind:d.kind,amountMinor:minor(d.amount),...(d.bankReference?{bankReference:d.bankReference}:{})}),d=>{document.getElementById('paymentId').value=d.payment?.id||''});
+wire('verifyForm','/admin/zc/payments/verify',d=>({paymentId:d.paymentId,bankReference:d.bankReference,bankReceiptConfirmed:!!document.querySelector('#verifyForm [name=confirmed]').checked}));
+wire('convertForm','/admin/zc/orders/convert',d=>({quoteId:d.quoteId}));
+</script></body></html>
