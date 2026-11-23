@@ -28,6 +28,14 @@ button:disabled{opacity:.5}small,p{line-height:1.5;color:#d5c7e2}.grid{display:g
 <label>Modalidad</label><select name="deliveryMode"><option value="workshop_pickup">Retiro en taller (gratis)</option><option value="home_delivery">Envío a domicilio (₡2.500)</option></select>
 <button>Crear cotización</button></form>
 <p><small>El adelanto se calcula automáticamente como el 50% del precio de los productos después del descuento. El envío no se incluye en el adelanto.</small></p></section>
+<section><h2>Modalidad y dirección de entrega</h2><form id="deliveryForm">
+<label>ID de solicitud</label><input name="requestId" required>
+<label>Modalidad</label><select name="deliveryMode"><option value="workshop_pickup">Retiro en taller</option><option value="home_delivery">Envío a domicilio</option></select>
+<div class="grid"><div><label>Destinatario (solo envío)</label><input name="recipientName"></div><div><label>Teléfono (solo envío)</label><input name="recipientPhone"></div>
+<div><label>Provincia</label><input name="province"></div><div><label>Cantón</label><input name="canton"></div><div><label>Distrito</label><input name="district"></div></div>
+<label>Dirección exacta</label><textarea name="addressLine1"></textarea>
+<label><input type="checkbox" name="addressConfirmed" style="width:auto"> Confirmé la dirección con el cliente</label>
+<button>Guardar modalidad</button></form></section>
 <section><h2>3. Enviar y aceptar cotización</h2><form id="quoteStatusForm">
 <label>ID de cotización</label><input id="quoteId" name="quoteId" required>
 <div class="grid"><button type="button" id="sent">Marcar como enviada</button><button type="button" id="accepted">Marcar como aceptada</button></div>
@@ -72,6 +80,7 @@ wire('quoteForm','/admin/zc/quotes',d=>({requestId:d.requestId,currency:'CRC',it
 for(const [id,path] of [['sent','/admin/zc/quotes/sent'],['accepted','/admin/zc/quotes/accept']]){
  document.getElementById(id).addEventListener('click',async e=>{try{await call(path,{quoteId:document.getElementById('quoteId').value.trim()},e.currentTarget)}catch(err){out.textContent=err.message}});
 }
+wire('deliveryForm','/admin/zc/delivery',d=>({requestId:d.requestId,deliveryMode:d.deliveryMode,...(d.deliveryMode==='home_delivery'?{recipientName:d.recipientName,recipientPhone:d.recipientPhone,province:d.province,canton:d.canton,district:d.district,addressLine1:d.addressLine1,addressConfirmed:!!document.querySelector('#deliveryForm [name=addressConfirmed]').checked}:{})}));
 wire('proofForm','/admin/zc/payments/proofs',d=>({quoteId:d.quoteId,kind:d.kind,amountMinor:minor(d.amount),...(d.bankReference?{bankReference:d.bankReference}:{})}),d=>{document.getElementById('paymentId').value=d.payment?.id||''});
 wire('verifyForm','/admin/zc/payments/verify',d=>({paymentId:d.paymentId,bankReference:d.bankReference,bankReceiptConfirmed:!!document.querySelector('#verifyForm [name=confirmed]').checked}));
 wire('convertForm','/admin/zc/orders/convert',d=>({quoteId:d.quoteId}));
